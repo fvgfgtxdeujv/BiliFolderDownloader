@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">B站收藏夹下载器</string>
+    <string name="notification_channel_name">下载进度</string>
+    <string name="notification_channel_desc">显示收藏夹下载任务的实时进度</string>
+</resources>

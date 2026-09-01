@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 日志文件：外部应用专属目录 logs/（getExternalFilesDir） -->
+    <external-files-path name="logs" path="logs/" />
+    <!-- 外部存储不可用时的回退目录（filesDir/logs） -->
+    <files-path name="logs_internal" path="logs/" />
+</paths>
