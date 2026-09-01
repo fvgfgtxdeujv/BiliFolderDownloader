@@ -28,7 +28,21 @@ class AppContainer(context: Context) {
     }
 
     /**
-     * 正式版调试日志：初始化日志数据库 + 加载加密证书/公钥 + 恢复设置页开关状态。
+     * 容器构造完成后调用（BiliApp.onCreate）。
+     * 注意：不要在构造函数里 launch 协程——构造期间 by lazy 字段尚未赋值，
+     * 协程在 IO 线程抢先运行会触发 getRecordStore() 的 delegate NPE。
+     */
+    fun start() {
+        scope.launch {
+            val enabled = recordStore.debugLogEnabled.first()
+            LogUtil.setDebugOverride(enabled)
+            LogUtil.d(TAG, "调试日志开关恢复：$enabled")
+        }
+    }
+
+    /**
+     * 正式版调试日志（同步初始化，构造期间调用）：
+     * 初始化日志数据库 + 加载加密证书/公钥。
      * 密钥文件由开发者自行生成后放入 assets：
      * - `log_encryption_cert.pem`（首选）：`openssl req -new -x509 -key private_key.pem -out log_encryption_cert.pem -days 365 -subj "/CN=..."` 的自签名证书
      * - `rsa_public_key.pem`（回退）：`openssl rsa -in private_key.pem -pubout -out rsa_public_key.pem` 的裸公钥
@@ -47,11 +61,6 @@ class AppContainer(context: Context) {
         LogUtil.setEncryptor(encryptor)
         if (encryptor != null) {
             LogUtil.d(TAG, "调试日志加密证书/公钥已加载")
-        }
-        scope.launch {
-            val enabled = recordStore.debugLogEnabled.first()
-            LogUtil.setDebugOverride(enabled)
-            LogUtil.d(TAG, "调试日志开关恢复：$enabled（加密器=${encryptor != null}）")
         }
     }
 
