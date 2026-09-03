@@ -1,6 +1,7 @@
 package com.bilifolder.downloader.util
 
 import androidx.test.core.app.ApplicationProvider
+import com.bilifolder.downloader.BuildConfig
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
@@ -28,9 +29,13 @@ import java.util.Date
 @Config(sdk = [34])
 class LogUtilExportTest {
 
-    /** 开发版：日志入库后导出文件包含详细日志行 */
+    /** 开发版：日志入库后导出文件包含详细日志行（仅 debug 变体；release 导出为加密 SMIME） */
     @Test
     fun exportProducesFileWithRecentLogs() {
+        // release 变体 BuildConfig.DEBUG=false，导出走加密路径且无加密器时返回 null，
+        // 明文导出语义由 debug 变体验证，加密导出由 releaseEncryptedExportDecryptsWithOpenSsl 覆盖
+        assumeTrue("开发版明文导出用例，release 变体跳过", BuildConfig.DEBUG)
+
         val dir = createTempDir()
         try {
             LogUtil.initLogStore(ApplicationProvider.getApplicationContext(), dir)

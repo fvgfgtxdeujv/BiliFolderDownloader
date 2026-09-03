@@ -19,7 +19,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 代码裁剪 + 资源裁剪（debug 包为便于调试不启用）
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -47,6 +49,8 @@ android {
             excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
             excludes += "/META-INF/LICENSE.md"
             excludes += "/META-INF/NOTICE.md"
+            // BC 的 PQC 抗量子算法参数（本项目仅用 CMS/RSA/AES-GCM，PQC 参数纯浪费 ~1.2MB）
+            excludes += "org/bouncycastle/pqc/**"
         }
     }
 
