@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    仅存在于 debug 源集：manifest 合并只在 debug 变体进行，
+    release 正式版不包含此 provider 声明与类。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- 开发调试用：MT 管理器 / 任意 SAF 客户端免 ROOT 访问应用私有目录 -->
+        <provider
+            android:name="com.bilifolder.downloader.debug.DebugFilesProvider"
+            android:authorities="${applicationId}.debugfiles"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+    </application>
+
+</manifest>
