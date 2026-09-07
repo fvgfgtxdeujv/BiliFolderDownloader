@@ -57,6 +57,20 @@ class LogStore(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_V
         rows
     }
 
+    /** 查询日志库当前全部行（时间升序）；空库返回空列表 */
+    fun queryAll(): List<String> = synchronized(lock) {
+        val rows = mutableListOf<String>()
+        runCatching {
+            readableDatabase.rawQuery(
+                "SELECT $COL_CONTENT FROM $TABLE ORDER BY $COL_TS ASC, id ASC",
+                null,
+            ).use { c ->
+                while (c.moveToNext()) rows.add(c.getString(0))
+            }
+        }
+        rows
+    }
+
     /** 删除 ts < [beforeMillis] 的过期日志 */
     fun deleteOlderThan(beforeMillis: Long) {
         synchronized(lock) {

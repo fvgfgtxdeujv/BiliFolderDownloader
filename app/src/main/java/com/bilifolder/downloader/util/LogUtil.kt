@@ -15,10 +15,11 @@ import java.time.format.DateTimeFormatter
  *
  * 输出规则：
  * - **logcat**：仅开发版（[BuildConfig.DEBUG]）输出明文；正式版完全禁止 logcat。
- * - **导出文件**：设置页「导出日志文件」默认导出最近 30 分钟，拼接为完整 txt。
- *   开发版导出明文 txt；正式版将整个 txt 一次性经 [LogEncryptor] 加密
- *   （CMS AuthEnvelopedData / AES-256-GCM，`openssl cms -encrypt -aes-256-gcm` 等价），
- *   输出 openssl SMIME 多行文本，`openssl cms -decrypt -in 文件 -inkey 私钥` 直接可解；
+ * - **导出文件**：设置页「导出日志文件」导出日志库当前全部内容并拼接为完整 txt。
+ *   日志不足 30 分钟甚至为空也会生成文件；开发版导出明文 txt；正式版将整个 txt
+ *   一次性经 [LogEncryptor] 加密（CMS AuthEnvelopedData / AES-256-GCM，
+ *   `openssl cms -encrypt -aes-256-gcm` 等价），输出 openssl SMIME 多行文本，
+ *   `openssl cms -decrypt -in 文件 -inkey 私钥` 直接可解；
  *   未配置证书/公钥时正式版导出返回 null。
  *
  * 纯 JVM 单元测试环境（未加载 Robolectric）下 `android.util.Log` 不可用，
@@ -26,11 +27,8 @@ import java.time.format.DateTimeFormatter
  */
 object LogUtil {
 
-    /** 数据库保留时长 / 清理周期（毫秒，30 分钟） */
+    /** 数据库保留时长 / 清理周期（毫秒，30 分钟）；导出即当前库全部内容 */
     const val RETENTION_MS = 30 * 60 * 1000L
-
-    /** 导出默认时间范围（分钟，最近 30 分钟） */
-    const val DEFAULT_EXPORT_MINUTES = 30
 
     /** 导出文件名（固定名，每次覆盖） */
     const val EXPORT_FILE_NAME = "bili_debug_export.txt"
@@ -76,19 +74,21 @@ object LogUtil {
     }
 
     /**
-     * 导出日志文件（默认最近 30 分钟），返回文件；无日志或未初始化返回 null。
+     * 导出日志文件（日志库当前全部内容；数据库只保留最近 [RETENTION_MS]）。
+     * 日志不足 30 分钟甚至为空时也会生成文件（空时仅文件头），便于随时确认链路；
+     * 仅当日志库/导出目录未初始化时返回 null。
      * 每次覆盖同名文件。
      * - 开发版：写明文 txt
      * - 正式版：把完整 txt 整体做一次 AES-256-GCM(RSA) 加密，文件内容为 openssl SMIME 文本
      */
-    fun exportLogs(minutes: Int = DEFAULT_EXPORT_MINUTES): File? {
+    fun exportLogs(): File? {
         val store = logStore ?: return null
         val dir = logsDir ?: return null
-        val since = System.currentTimeMillis() - minutes * 60_000L
-        val rows = store.querySince(since)
-        if (rows.isEmpty()) return null
+        // 导出当前库中全部日志；数据库由清理线程保证只保留最近 30 分钟，
+        // 因此"不足 30 分钟/为空"也照常产出文件
+        val rows = store.queryAll()
         val fullText = buildString {
-            append("=== bili debug log export (last $minutes min, ${rows.size} lines) ===\n")
+            append("=== bili debug log export (${rows.size} lines) ===\n")
             rows.forEach { append(it).append('\n') }
         }
         val file = File(dir, EXPORT_FILE_NAME)

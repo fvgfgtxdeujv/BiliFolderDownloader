@@ -56,6 +56,26 @@ class LogUtilExportTest {
         }
     }
 
+    /** 开发版：未写入业务日志（只有初始化行）时导出仍生成文件，不因"不足 30 分钟"而拒绝 */
+    @Test
+    fun exportEmptyDatabaseStillProducesFile() {
+        assumeTrue("开发版明文导出用例，release 变体跳过", BuildConfig.DEBUG)
+
+        val dir = createTempDir()
+        try {
+            LogUtil.initLogStore(ApplicationProvider.getApplicationContext(), dir)
+
+            val file = LogUtil.exportLogs()
+            assertNotNull("只有初始化日志也应能导出文件", file)
+            val content = file!!.readText()
+            assertTrue("应含导出文件头", content.contains("=== bili debug log export"))
+            assertTrue("应含行数标记", Regex("lines\\) ===").containsMatchIn(content))
+        } finally {
+            LogUtil.initLogStore(ApplicationProvider.getApplicationContext(), createTempDir())
+            dir.deleteRecursively()
+        }
+    }
+
     /** 正式版导出核心：整个文本加密为 openssl SMIME，`openssl cms -decrypt` 直接还原 */
     @Test
     fun releaseEncryptedExportDecryptsWithOpenSsl() {

@@ -262,7 +262,7 @@ fun SettingsScreen(
                             Text("调试日志", style = MaterialTheme.typography.titleMedium)
                             Text(
                                 if (com.bilifolder.downloader.BuildConfig.DEBUG) {
-                                    "开发版：logcat 明文 + 文件导出（明文 txt）"
+                                    "开发版：logcat 明文 + 文件导出（明文 txt，不足 30 分钟也会导出）"
                                 } else {
                                     "开启后导出整体 RSA 加密的日志文件（logcat 已禁用），需先在 assets/rsa_public_key.pem 放置公钥"
                                 },
@@ -281,9 +281,9 @@ fun SettingsScreen(
                     var exportMsg by remember { mutableStateOf<String?>(null) }
                     Button(
                         onClick = {
-                            // 默认导出最近 30 分钟日志
+                            // 导出日志库当前全部内容；不足 30 分钟甚至为空也会生成文件
                             val f = com.bilifolder.downloader.util.LogUtil.exportLogs()
-                            if (f != null && f.exists()) {
+                            if (f != null) {
                                 exportMsg = null
                                 val uri = FileProvider.getUriForFile(
                                     context, "${context.packageName}.fileprovider", f,
@@ -295,12 +295,12 @@ fun SettingsScreen(
                                 }
                                 context.startActivity(Intent.createChooser(intent, "导出日志文件"))
                             } else {
-                                exportMsg = "暂无最近 30 分钟日志可导出"
+                                exportMsg = "日志系统未初始化，无法导出"
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("导出日志文件（最近 30 分钟）")
+                        Text("导出日志文件")
                     }
                     exportMsg?.let {
                         Spacer(Modifier.height(4.dp))
