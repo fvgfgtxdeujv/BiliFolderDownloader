@@ -1,3 +1,6 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -18,8 +21,19 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 开发版同样裁剪（dex 死代码 + 无用资源），但不做混淆与字节码优化：
+            // -dontobfuscate 保留原名、-dontoptimize 保持字节码结构，便于断点调试与堆栈直接可读
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+                "proguard-rules-debug.pro",
+            )
+        }
         release {
-            // R8 代码裁剪 + 资源裁剪（debug 包为便于调试不启用）
+            // R8 代码裁剪 + 资源裁剪（混淆 + 优化全开，体积最小）
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -59,6 +73,32 @@ android {
             isReturnDefaultValues = true
         }
     }
+}
+
+// ===== release mapping 归档（防止被后续构建覆盖，崩溃堆栈恢复用，配合 tools/retrace.py） =====
+tasks.register("archiveReleaseMapping") {
+    group = "reporting"
+    description = "将当前 release 构建的 mapping.txt 归档为 mapping-<versionName>-<时间戳>.txt，防止被后续构建覆盖"
+    doLast {
+        val mappingFile = layout.buildDirectory.file("outputs/mapping/release/mapping.txt").get().asFile
+        check(mappingFile.isFile) {
+            "mapping 文件不存在：$mappingFile，请先运行 assembleRelease"
+        }
+        val version = project.extensions.getByType(com.android.build.gradle.AppExtension::class.java)
+            .defaultConfig.versionName ?: "unknown"
+        val stamp = LocalDateTime.now()
+            .format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+        val archiveDir = layout.buildDirectory.dir("outputs/mapping/archive").get().asFile
+        archiveDir.mkdirs()
+        val dest = File(archiveDir, "mapping-${version}-${stamp}.txt")
+        mappingFile.copyTo(dest, overwrite = true)
+        logger.lifecycle("release mapping 已归档：${dest.absolutePath}")
+    }
+}
+
+// assembleRelease 执行成功后自动触发归档（assembleRelease 注册较晚，用 matching 延迟挂接）
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    finalizedBy("archiveReleaseMapping")
 }
 
 dependencies {
