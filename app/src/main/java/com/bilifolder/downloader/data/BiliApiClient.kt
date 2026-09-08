@@ -54,7 +54,7 @@ class BiliApiClient(
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
-        .cookieJar(cookieJar ?: InMemoryCookieJar(sessionCookies, apiBaseUrl.toHttpUrl().host))
+        .cookieJar(cookieJar ?: InMemoryCookieJar(sessionCookies))
         .addInterceptor { chain ->
             val builder = chain.request().newBuilder()
                 .header("User-Agent", userAgent)
@@ -385,14 +385,16 @@ class BiliApiClient(
     }
 }
 
-/** 内存 CookieJar：只保存 B 站域名 Cookie 到会话 map（配合请求拦截器附加） */
-private class InMemoryCookieJar(
+/** 内存 CookieJar：只保存 B 站域 Cookie 到会话 map（配合请求拦截器附加）。 */
+internal class InMemoryCookieJar(
     private val store: MutableMap<String, String>,
-    private val cookieHost: String,
 ) : CookieJar {
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-        if (url.host != cookieHost && !url.host.endsWith(".$cookieHost")) return
+        // 只收集 B 站家族域（api/passport/space 等）下发的 Cookie。
+        // 注意：二维码登录 poll 走 passport.bilibili.com，若此处只认 api.bilibili.com，
+        // 登录成功响应里的 SESSDATA/bili_jct/DedeUserID 会被全部丢弃，导致登录态保存为空。
+        if (!url.host.isBiliFamily()) return
         cookies.forEach { cookie ->
             if (!cookie.value.isNullOrBlank()) {
                 store[cookie.name] = cookie.value
@@ -402,3 +404,7 @@ private class InMemoryCookieJar(
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> = emptyList()
 }
+
+/** host 是否属于 B 站域名家族（bilibili.com 或任意子域） */
+internal fun String.isBiliFamily(): Boolean =
+    this == "bilibili.com" || endsWith(".bilibili.com")

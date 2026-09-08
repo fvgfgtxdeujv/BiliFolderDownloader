@@ -1,6 +1,7 @@
 package com.bilifolder.downloader.engine
 
 import android.content.Context
+import android.os.Build
 import com.bilifolder.downloader.data.model.EngineProgress
 import com.bilifolder.downloader.data.model.EngineStatus
 import com.bilifolder.downloader.data.model.EngineTask
@@ -94,7 +95,13 @@ class GopeedEngine(
                 LogUtil.d(TAG, "isAvailable: exit=${proc.exitValue()} ok=$ok")
                 ok
             } catch (e: IOException) {
-                LogUtil.e(TAG, "isAvailable: 执行失败", e)
+                // 记录失败原因与设备 ABI，便于从导出日志直接定位
+                // （exec 拒绝多为 noexec/SELinux 的 Permission denied，架构不符为 Exec format error）
+                LogUtil.e(
+                    TAG,
+                    "isAvailable: 执行失败: ${e.message} abi=${Build.SUPPORTED_ABIS.contentToString()}",
+                    e,
+                )
                 false
             }
         }
