@@ -1,5 +1,6 @@
 # 桌面辅助脚本（含 WebDAV 明文凭据，不纳入版本控制）
 webdav_123pan.py
+__pycache__/
 
 # Gradle
 .gradle/
