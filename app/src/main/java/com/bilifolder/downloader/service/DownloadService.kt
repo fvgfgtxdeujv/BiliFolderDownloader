@@ -73,10 +73,10 @@ class DownloadService : Service() {
     override fun onCreate() {
         super.onCreate()
         LogUtil.d(TAG, "onCreate")
-        manager = (application as BiliApp).container.downloadManager
+        manager = BiliApp.container.downloadManager
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
-        (application as BiliApp).container.networkMonitor.start()
+        BiliApp.container.networkMonitor.start()
         // 收集下载事件驱动通知更新
         serviceScope.launch {
             manager.events.collect { event ->
@@ -144,7 +144,7 @@ class DownloadService : Service() {
 
     override fun onDestroy() {
         LogUtil.d(TAG, "onDestroy")
-        (application as BiliApp).container.networkMonitor.stop()
+        BiliApp.container.networkMonitor.stop()
         serviceScope.cancel()
         super.onDestroy()
     }

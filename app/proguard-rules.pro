@@ -28,3 +28,9 @@
 # ---------- OkHttp ----------
 -dontwarn okhttp3.**
 -dontwarn okio.**
+
+# ---------- Tinker ----------
+# TinkerApplication 的 delegate（BiliAppLike）类名以字符串传给 loader 反射实例化，
+# 混淆/裁剪会破坏反射，必须整类保留。BiliApp 因 manifest 引用不会被移除，但构造入口同保。
+-keep class com.bilifolder.downloader.BiliAppLike { *; }
+-keep class com.bilifolder.downloader.BiliApp { *; }

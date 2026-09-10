@@ -20,6 +20,8 @@ espressoCore = "3.6.1"
 androidxJunit = "1.2.1"
 zxing = "3.5.3"
 bouncycastle = "1.85"
+# Tinker 补丁插件 1.9.15.2（lib 1.9.15.2 主件在 Maven Central 缺失，运行时库用同代 1.9.15.1）
+tinker = "1.9.15.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -54,6 +56,7 @@ espresso-core = { group = "androidx.test.espresso", name = "espresso-core", vers
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 bouncycastle-prov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 bouncycastle-pkix = { group = "org.bouncycastle", name = "bcpkix-jdk18on", version.ref = "bouncycastle" }
+tinker-android-lib = { group = "com.tencent.tinker", name = "tinker-android-lib", version.ref = "tinker" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

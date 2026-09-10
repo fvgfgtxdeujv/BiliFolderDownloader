@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
  */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    val container: AppContainer get() = (getApplication<BiliApp>()).container
+    val container: AppContainer get() = BiliApp.container
 
     // ---------- 登录态（需求 1、2） ----------
 
