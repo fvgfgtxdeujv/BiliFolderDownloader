@@ -2,6 +2,7 @@ package com.bilifolder.downloader.data
 
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,9 +53,18 @@ class StorageManagerTest {
     }
 
     @Test
-    fun `下载目录可创建且可写`() {
+    fun `成品目录位于公共 Movies 下且可创建`() {
         val dir = storage.downloadDir
-        assertEquals("downloads", dir.name)
+        assertEquals("BiliFolderDownloader", dir.name)
+        assertTrue(dir.absolutePath.contains("Movies"))
         assertEquals(true, dir.isDirectory)
+    }
+
+    @Test
+    fun `临时分片目录与应用专属 zip 目录可创建`() {
+        assertEquals("downloads_tmp", storage.tempDir.name)
+        assertEquals(true, storage.tempDir.isDirectory)
+        assertEquals("zips", storage.zipDir.name)
+        assertEquals(true, storage.zipDir.isDirectory)
     }
 }

@@ -41,14 +41,16 @@ class DownloadRecordStoreTest {
         assertEquals(80, initial.quality)
         assertFalse(initial.deleteAfterDownload)
         assertFalse(initial.wifiOnly)
+        assertTrue(initial.mobileDataPrompt)
         assertEquals(2, initial.retryCount)
 
-        store.updateSettings { it.copy(limitKbps = 0, quality = 112, deleteAfterDownload = true, wifiOnly = true, retryCount = 0) }
+        store.updateSettings { it.copy(limitKbps = 0, quality = 112, deleteAfterDownload = true, wifiOnly = true, mobileDataPrompt = false, retryCount = 0) }
         val updated = store.settings.first()
         assertEquals(0, updated.limitKbps)
         assertEquals(112, updated.quality)
         assertTrue(updated.deleteAfterDownload)
         assertTrue(updated.wifiOnly)
+        assertFalse(updated.mobileDataPrompt)
         assertEquals(0, updated.retryCount)
     }
 

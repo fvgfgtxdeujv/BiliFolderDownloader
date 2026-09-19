@@ -2,6 +2,10 @@
 webdav_123pan.py
 __pycache__/
 
+# 开发版调试 WebDAV 凭据（外置配置文件，明文，不纳入版本控制）
+# 放在 debug 源集，仅开发版打包，正式版不含凭据
+app/src/debug/assets/debug_webdav.properties
+
 # Gradle
 .gradle/
 build/

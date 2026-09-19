@@ -74,6 +74,7 @@ fun AppNavHost(activity: Activity) {
             LoginScreen(
                 viewModel = viewModel,
                 onLoggedIn = {
+                    viewModel.onLoginSucceeded()
                     navController.navigate(Routes.FOLDERS) { popUpTo(0) }
                 },
                 onOpenWebLogin = { navController.navigate(Routes.WEB_LOGIN) },
@@ -83,7 +84,7 @@ fun AppNavHost(activity: Activity) {
             WebLoginScreen(
                 client = viewModel.container.biliApiClient,
                 onLoggedIn = {
-                    viewModel.refreshLoginState()
+                    viewModel.onLoginSucceeded()
                     navController.navigate(Routes.FOLDERS) { popUpTo(0) }
                 },
                 onBack = { navController.popBackStack() },
@@ -131,6 +132,10 @@ fun AppNavHost(activity: Activity) {
                 viewModel = viewModel,
                 onBack = { navController.popBackStack() },
                 onStop = { viewModel.container.downloadManager.stop() },
+                onFinished = {
+                    // 任务结束（自然完成或停止后收尾）→ 回到主页面（收藏夹）
+                    navController.popBackStack(Routes.FOLDERS, inclusive = false)
+                },
             )
         }
         composable(Routes.SETTINGS) {

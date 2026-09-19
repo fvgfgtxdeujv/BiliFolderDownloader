@@ -34,3 +34,8 @@
 # 混淆/裁剪会破坏反射，必须整类保留。BiliApp 因 manifest 引用不会被移除，但构造入口同保。
 -keep class com.bilifolder.downloader.BiliAppLike { *; }
 -keep class com.bilifolder.downloader.BiliApp { *; }
+
+# ---------- Gopeed 引擎（gomobile 绑定） ----------
+# gomobile 生成的绑定类通过 JNI 反射注册回调代理与入口方法，R8 无法静态感知，
+# 重命名/裁剪会导致 UnsatisfiedLinkError 或回调丢失，必须整包保留。
+-keep class com.gopeed.** { *; }

@@ -10,7 +10,7 @@ import org.junit.Test
  */
 class DownloadManagerTest {
 
-    private fun v(bvid: String, title: String) = VideoInfo(bvid = bvid, title = title, cid = 1)
+    private fun v(bvid: String, title: String) = VideoInfo(bvid = bvid, title = title, cid = 1L)
 
     private val videos = listOf(
         v("BV1", "视频一"),

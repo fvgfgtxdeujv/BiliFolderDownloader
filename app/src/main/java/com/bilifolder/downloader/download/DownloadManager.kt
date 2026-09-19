@@ -28,8 +28,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -42,9 +45,9 @@ import kotlinx.coroutines.launch
  * 3. 逐视频：取播放地址 → 引擎下载（视频/音频并行）→ Mp4Muxer 合并 → PlaybackVerifier 校验
  *    → 可选删除源视频 → 记录 bvid；失败按重试次数递增间隔重试（5s、15s）
  * 4. 视频间间隔 2s，收藏夹间间隔 3s（需求 5 反风控）
- * 5. 全部完成：ZipHelper 打包 → 可选 WebDAV 自动上传（需求 9、21）
+ * 5. 全部完成：默认不打包；仅开启 WebDAV 自动上传时打包并上传，远端确认后删除本地 zip（需求 9、21）
  *
- * 网络暂停恢复（需求 15）：`仅 WiFi 模式 + 蜂窝网络` 时暂停当前任务并等待 WiFi。
+ * 网络暂停恢复（需求 15）：断网时暂停任务等待网络恢复；`仅 WiFi 模式 + 蜂窝网络` 时暂停等待 WiFi。
  * 通过 [DownloadEvent] SharedFlow 上报日志/进度/完成事件驱动 UI。
  */
 class DownloadManager(
@@ -67,6 +70,9 @@ class DownloadManager(
     sealed interface DownloadEvent {
         data class Log(val line: String) : DownloadEvent
         data class Progress(val done: Int, val total: Int, val currentTitle: String?) : DownloadEvent
+
+        /** 当前文件（视频流/音频流）的字节级进度，驱动下载页与通知的进度条 */
+        data class FileProgress(val label: String, val downloaded: Long, val total: Long) : DownloadEvent
         data class Finished(
             val folderName: String,
             val total: Int,
@@ -82,8 +88,10 @@ class DownloadManager(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    @Volatile
-    private var running = false
+    private val _running = MutableStateFlow(false)
+
+    /** 运行状态流：UI 据此在任务结束（含主动停止）后自动返回主页面 */
+    val runningState: StateFlow<Boolean> = _running.asStateFlow()
 
     @Volatile
     private var stopFlag = false
@@ -91,12 +99,12 @@ class DownloadManager(
     @Volatile
     private var currentEngine: DownloadEngine? = null
 
-    val isRunning: Boolean get() = running
+    val isRunning: Boolean get() = _running.value
 
     /** 启动下载；已运行时不重复启动 */
     fun start(requests: List<DownloadRequest>) {
         LogUtil.d(TAG, "start: 请求 ${requests.size} 个收藏夹")
-        if (running || requests.isEmpty()) {
+        if (_running.value || requests.isEmpty()) {
             LogUtil.w(TAG, "start: 已运行或请求为空，忽略")
             return
         }
@@ -110,7 +118,7 @@ class DownloadManager(
             emit(DownloadEvent.Log("下载目录不可写，请检查存储空间"))
             return
         }
-        running = true
+        _running.value = true
         stopFlag = false
         scope.launch { run(requests) }
     }
@@ -130,13 +138,15 @@ class DownloadManager(
         var totalFailed = 0
         var totalSkipped = 0
         val firstFolderName = requests.first().folder.title
+        // 本次任务新增的成品文件（成品保留在公共目录，zip 只打包这些）
+        val producedFiles = mutableListOf<File>()
 
         try {
             requests.forEachIndexed { index, request ->
                 if (stopFlag) return@forEachIndexed
                 LogUtil.d(TAG, "run: 开始处理收藏夹「${request.folder.title}」(${index + 1}/${requests.size})")
                 emit(DownloadEvent.Log("开始处理收藏夹：${request.folder.title}"))
-                val result = processFolder(request, engine)
+                val result = processFolder(request, engine, producedFiles)
                 totalDone += result.processed
                 totalSuccess += result.success
                 totalFailed += result.failed
@@ -151,17 +161,8 @@ class DownloadManager(
             }
 
             if (!stopFlag) {
-                // 全部完成：打包 + 自动上传（需求 9、21）
-                LogUtil.d(TAG, "run: 全部收藏夹处理完成，开始打包 zip")
-                emit(DownloadEvent.Log("全部收藏夹处理完成，开始打包 zip…"))
-                val zipResult = ZipHelper.zipDirectory(storageManager.downloadDir)
-                val zipPath = zipResult.zipFile?.absolutePath
-                if (zipResult.error != null) {
-                    emit(DownloadEvent.Log("打包失败：${zipResult.error}"))
-                } else if (zipPath != null) {
-                    emit(DownloadEvent.Log("打包完成：${zipResult.zipFile?.name}，共 ${zipResult.fileCount} 个文件"))
-                    uploadZipIfEnabled(zipResult.zipFile!!, firstFolderName)
-                }
+                // 全部完成：默认不打包；仅开启 WebDAV 自动上传时打包并上传（需求 9、21）
+                val zipPath = packAndUploadIfEnabled(firstFolderName, producedFiles)
 
                 recordStore.addTaskHistory(
                     TaskHistory(
@@ -177,7 +178,7 @@ class DownloadManager(
             }
         } finally {
             LogUtil.d(TAG, "run: 结束，success=$totalSuccess failed=$totalFailed skipped=$totalSkipped")
-            running = false
+            _running.value = false
             stopFlag = false
             currentEngine = null
             emit(DownloadEvent.Finished(firstFolderName, totalDone, totalSuccess, totalFailed, totalSkipped, null))
@@ -211,6 +212,7 @@ class DownloadManager(
     private suspend fun processFolder(
         request: DownloadRequest,
         engine: DownloadEngine,
+        produced: MutableList<File>,
     ): FolderResult {
         val folder = request.folder
         // 分页拉取全部视频（翻页间隔 1.5s，需求 5 第 4 条）
@@ -267,7 +269,7 @@ class DownloadManager(
         selected.forEachIndexed { index, video ->
             if (stopFlag) return@forEachIndexed
             emit(DownloadEvent.Progress(done, mediaCount, video.title))
-            val ok = processVideo(video, folder, engine, settings)
+            val ok = processVideo(video, folder, engine, settings, produced)
             if (ok) success++ else failed++
             done++
             emit(DownloadEvent.Progress(done, mediaCount, video.title))
@@ -288,10 +290,12 @@ class DownloadManager(
         folder: Folder,
         engine: DownloadEngine,
         settings: com.bilifolder.downloader.data.DownloadSettings,
+        produced: MutableList<File>,
     ): Boolean {
         val safeTitle = storageManager.safeFileName(video.title)
-        val videoFile = File(storageManager.downloadDir, "${safeTitle}_video.mp4")
-        val audioFile = File(storageManager.downloadDir, "${safeTitle}_audio.mp4")
+        // 分片写应用专属目录，成品写公共 Movies（相册/文件管理器可见）
+        val videoFile = File(storageManager.tempDir, "${safeTitle}_video.mp4")
+        val audioFile = File(storageManager.tempDir, "${safeTitle}_audio.mp4")
         val outputFile = File(storageManager.downloadDir, "$safeTitle.mp4")
 
         val retryCount = settings.retryCount.coerceIn(0, 5)
@@ -321,9 +325,9 @@ class DownloadManager(
             }
 
             // 下载视频流 + 音频流（并行）
-            val videoOk = downloadStream(engine, play.videoUrl, videoFile, settings)
+            val videoOk = downloadStream(engine, play.videoUrl, videoFile, settings, "视频流")
             val audioOk = if (play.audioUrl != null) {
-                downloadStream(engine, play.audioUrl, audioFile, settings)
+                downloadStream(engine, play.audioUrl, audioFile, settings, "音频流")
             } else {
                 emit(DownloadEvent.Log("无音频流，仅视频轨"))
                 true
@@ -365,9 +369,10 @@ class DownloadManager(
                 continue
             }
 
-            // 成功：删除临时文件
+            // 成功：删除临时分片，并让媒体库索引成品（相册/文件管理器立即可见）
             videoFile.delete()
             audioFile.delete()
+            storageManager.scanMedia(outputFile)
 
             // 可选删除源视频（需求 7）
             if (settings.deleteAfterDownload) {
@@ -375,6 +380,9 @@ class DownloadManager(
                 LogUtil.d(TAG, "processVideo: 「${video.title}」删除源视频结果=$deleted")
                 emit(DownloadEvent.Log(if (deleted) "已从收藏夹删除：${video.title}" else "删除源视频失败：${video.title}"))
             }
+
+            // 记录本次新增成品，供任务结束时打包 zip
+            produced += outputFile
 
             // 记录已下载 bvid（需求 8）
             recordStore.addDownloadedBvids(setOf(video.bvid))
@@ -392,7 +400,12 @@ class DownloadManager(
         url: String,
         file: File,
         settings: com.bilifolder.downloader.data.DownloadSettings,
+        label: String = file.name,
     ): Boolean {
+        // 断网/仅 WiFi 不满足时，先等待网络再创建任务，避免离线创建必然失败的任务
+        waitForNetwork(settings.wifiOnly)
+        if (stopFlag) return false
+
         val task: EngineTask = try {
             LogUtil.d(TAG, "downloadStream: 创建任务 ${file.name}")
             engine.download(url, file.absolutePath, file.name)
@@ -401,14 +414,17 @@ class DownloadManager(
             emit(DownloadEvent.Log("创建下载任务失败：${e.message}"))
             return false
         }
+        // 新流开始：先把进度条归零，避免沿用上一条流的百分比
+        emit(DownloadEvent.FileProgress(label, 0, 0))
 
         var lastDownloaded = 0L
         var stallCount = 0
         while (!stopFlag) {
-            // 仅 WiFi 模式下的网络等待（需求 15）
+            // 网络不满足条件时暂停等待（断网 / 仅 WiFi 模式下用移动数据）
             awaitNetworkIfNeeded(settings.wifiOnly, engine, task)
 
             val progress = engine.query(task)
+            emit(DownloadEvent.FileProgress(label, progress.downloaded, progress.total))
             when (progress.status) {
                 EngineStatus.DONE -> {
                     LogUtil.d(TAG, "downloadStream: ${file.name} 完成，${progress.downloaded} 字节")
@@ -443,60 +459,145 @@ class DownloadManager(
         return false
     }
 
-    /** 仅 WiFi 模式 + 非 WiFi 网络：暂停任务等待恢复（需求 15） */
+    /**
+     * 网络不可用/不满足条件时暂停当前任务，恢复后自动续传（需求 15）。
+     *
+     * 两种情况会暂停：
+     * - 完全断网（`DISCONNECTED`）：任意模式下暂停，等待网络恢复（WiFi 或移动数据均可）
+     * - 仅 WiFi 模式且当前为移动网络：暂停等待切换到 WiFi
+     */
     private suspend fun awaitNetworkIfNeeded(
         wifiOnly: Boolean,
         engine: DownloadEngine,
         task: EngineTask,
     ) {
-        if (!wifiOnly) return
-        if (networkMonitor.networkState.value == NetworkMonitor.NetworkState.WIFI) return
-        LogUtil.d(TAG, "awaitNetworkIfNeeded: 移动网络，暂停 ${task.id} 等待 WiFi")
-        emit(DownloadEvent.Log("当前为移动网络，任务暂停，等待 WiFi…"))
+        if (isNetworkReady(wifiOnly)) return
+        val reason = networkPauseReason()
+        LogUtil.d(TAG, "awaitNetworkIfNeeded: 暂停 ${task.id}（$reason）")
+        emit(DownloadEvent.Log(reason))
         engine.pause(task)
-        while (!stopFlag && networkMonitor.networkState.value != NetworkMonitor.NetworkState.WIFI) {
+        while (!stopFlag && !isNetworkReady(wifiOnly)) {
             delay(2000)
         }
         if (!stopFlag) {
-            LogUtil.d(TAG, "awaitNetworkIfNeeded: WiFi 已恢复，继续 ${task.id}")
+            LogUtil.d(TAG, "awaitNetworkIfNeeded: 网络恢复，继续 ${task.id}")
+            emit(DownloadEvent.Log("网络已恢复，继续下载"))
             engine.resume(task)
         }
     }
 
-    // ---------- zip 自动上传（需求 21） ----------
+    /** 创建任务前等待网络满足条件（此时尚无引擎任务，只能等待） */
+    private suspend fun waitForNetwork(wifiOnly: Boolean) {
+        if (isNetworkReady(wifiOnly)) return
+        emit(DownloadEvent.Log(networkPauseReason()))
+        while (!stopFlag && !isNetworkReady(wifiOnly)) {
+            delay(2000)
+        }
+    }
 
-    private suspend fun uploadZipIfEnabled(zipFile: File, folderName: String) {
+    /** 当前网络是否满足下载条件：非断网，且（非仅 WiFi 模式 或 已连 WiFi） */
+    private fun isNetworkReady(wifiOnly: Boolean): Boolean =
+        when (networkMonitor.networkState.value) {
+            NetworkMonitor.NetworkState.DISCONNECTED -> false
+            NetworkMonitor.NetworkState.WIFI -> true
+            NetworkMonitor.NetworkState.CELLULAR -> !wifiOnly
+        }
+
+    /** 暂停原因文案 */
+    private fun networkPauseReason(): String =
+        if (networkMonitor.networkState.value == NetworkMonitor.NetworkState.DISCONNECTED) {
+            "当前无网络，任务暂停，等待网络恢复…"
+        } else {
+            "当前为移动网络，任务暂停，等待 WiFi…"
+        }
+
+    // ---------- zip 打包与自动上传（需求 9、21） ----------
+
+    /**
+     * 下载完成后的收尾：默认不打包。
+     *
+     * 仅当用户开启 WebDAV 自动上传且配置完整时，才把本次新增成品打成 zip 并上传；
+     * 上传成功后再次确认远端存在，确认到才删除本地 zip。
+     *
+     * @return 失败时保留在本地待重试的 zip 路径；未打包或上传成功已删除时返回 null
+     */
+    private suspend fun packAndUploadIfEnabled(folderName: String, produced: List<File>): String? {
         val config = recordStore.webDavConfig.first()
-        LogUtil.d(TAG, "uploadZipIfEnabled: autoUpload=${config.autoUpload} configured=${config.isConfigured()}")
         if (!config.autoUpload || !config.isConfigured()) {
-            if (config.autoUpload) emit(DownloadEvent.Log("WebDAV 未配置完整，跳过自动上传"))
-            return
+            LogUtil.d(TAG, "packAndUploadIfEnabled: 未开启 WebDAV 自动上传，跳过打包")
+            return null
         }
         val password = cookieStore.webDavPassword()
         if (password.isNullOrEmpty()) {
-            LogUtil.w(TAG, "uploadZipIfEnabled: WebDAV 密码未设置")
-            emit(DownloadEvent.Log("WebDAV 密码未设置，跳过自动上传"))
-            return
+            LogUtil.w(TAG, "packAndUploadIfEnabled: WebDAV 密码未设置")
+            emit(DownloadEvent.Log("WebDAV 密码未设置，跳过打包上传"))
+            return null
         }
-        LogUtil.d(TAG, "uploadZipIfEnabled: 开始自动上传 ${zipFile.name}")
-        emit(DownloadEvent.Log("自动上传 zip 到 WebDAV…"))
+        if (produced.isEmpty()) {
+            LogUtil.d(TAG, "packAndUploadIfEnabled: 本次无新增成品，跳过打包")
+            return null
+        }
+
+        LogUtil.d(TAG, "packAndUploadIfEnabled: 开始打包（本次新增 ${produced.size} 个）")
+        emit(DownloadEvent.Log("WebDAV 已开启，开始打包 ${produced.size} 个成品…"))
+        val zipResult = ZipHelper.zipFiles(
+            sources = produced,
+            outputDir = storageManager.zipDir,
+            deleteSources = false,
+        )
+        val zipFile = zipResult.zipFile
+        if (zipResult.error != null || zipFile == null) {
+            emit(DownloadEvent.Log("打包失败：${zipResult.error ?: "未知错误"}"))
+            return null
+        }
+        emit(DownloadEvent.Log("打包完成：${zipFile.name}，共 ${zipResult.fileCount} 个文件"))
+        return uploadAndConfirm(zipFile, folderName, config.url, config.username, password)
+    }
+
+    /**
+     * 上传 zip 并二次确认远端存在，确认成功才删除本地 zip。
+     * @return 未确认成功时返回本地 zip 路径（保留待重试）；确认成功返回 null
+     */
+    private suspend fun uploadAndConfirm(
+        zipFile: File,
+        folderName: String,
+        url: String,
+        username: String,
+        password: String,
+    ): String? {
         val remoteDir = buildUploadRemoteDir(folderName)
-        val dirOk = webDavClient.mkdir(config.url, remoteDir, config.username, password)
-        if (!dirOk) {
-            LogUtil.w(TAG, "uploadZipIfEnabled: 目录创建失败 $remoteDir")
+        if (!webDavClient.mkdir(url, remoteDir, username, password)) {
+            LogUtil.w(TAG, "uploadAndConfirm: 目录创建失败 $remoteDir")
             emit(DownloadEvent.Log("WebDAV 目录创建失败，zip 已保留本地，可稍后重试"))
-            return
+            return zipFile.absolutePath
         }
         val remotePath = "$remoteDir/${zipFile.name}"
-        val result = webDavClient.uploadZip(config.url, remotePath, config.username, password, zipFile) { done, total ->
+        emit(DownloadEvent.Log("上传 zip 到 WebDAV…"))
+        val result = webDavClient.uploadZip(url, remotePath, username, password, zipFile) { done, total ->
             emit(DownloadEvent.Log("上传进度：${done * 100 / total.coerceAtLeast(1)}%"))
         }
-        LogUtil.d(TAG, "uploadZipIfEnabled: 上传结果=$result")
+        LogUtil.d(TAG, "uploadAndConfirm: 上传结果=$result remote=$remotePath")
         when (result) {
-            WebDavClient.UploadResult.OK -> emit(DownloadEvent.Log("zip 上传成功：$remotePath"))
-            WebDavClient.UploadResult.AUTH -> emit(DownloadEvent.Log("WebDAV 认证失败，请检查账号配置"))
-            WebDavClient.UploadResult.FAILED -> emit(DownloadEvent.Log("zip 上传失败，已保留本地，可稍后重试"))
+            WebDavClient.UploadResult.AUTH -> {
+                emit(DownloadEvent.Log("WebDAV 认证失败，请检查账号配置，zip 已保留本地"))
+                return zipFile.absolutePath
+            }
+            WebDavClient.UploadResult.FAILED -> {
+                emit(DownloadEvent.Log("zip 上传失败，已保留本地，可稍后重试"))
+                return zipFile.absolutePath
+            }
+            WebDavClient.UploadResult.OK -> Unit
         }
+        // 上传返回成功后仍需确认远端确实存在，确认到才删除本地 zip
+        if (!webDavClient.exists(url, remotePath, username, password)) {
+            LogUtil.w(TAG, "uploadAndConfirm: 上传后未确认到远端文件 $remotePath")
+            emit(DownloadEvent.Log("已上传但未确认到远端文件，zip 已保留本地"))
+            return zipFile.absolutePath
+        }
+        val deleted = zipFile.delete()
+        LogUtil.d(TAG, "uploadAndConfirm: 远端确认成功，删除本地 zip=${zipFile.name} deleted=$deleted")
+        emit(DownloadEvent.Log("zip 上传成功，已删除本地 zip（$remotePath）"))
+        return null
     }
 
     private fun buildUploadRemoteDir(folderName: String): String {

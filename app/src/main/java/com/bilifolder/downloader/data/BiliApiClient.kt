@@ -7,12 +7,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
+import kotlinx.serialization.json.longOrNull
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -23,6 +22,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+
+/**
+ * JSON `null` 字面量安全访问：值为 `null`（而非键缺失）时返回 null，避免 `jsonObject` 抛异常。
+ */
+private fun JsonElement?.asObject(): JsonObject? = this as? JsonObject
 
 /**
  * B 站 API 客户端（设计 4.1），对应桌面版 `BilibiliClient`（`1.py#L59-L370`）。
@@ -92,7 +96,7 @@ class BiliApiClient(
             LogUtil.w(TAG, "getQrCode: 接口失败")
             return@withContext null
         }
-        val data = body["data"]?.jsonObject ?: run {
+        val data = body["data"]?.asObject() ?: run {
             LogUtil.w(TAG, "getQrCode: 响应无 data 字段")
             return@withContext null
         }
@@ -113,8 +117,8 @@ class BiliApiClient(
             "$passportBaseUrl/x/passport-login/web/qrcode/poll",
             mapOf("qrcode_key" to qrcodeKey)
         ) ?: return@withContext PollResult(-1, "网络异常")
-        val code = body["data"]?.jsonObject?.get("code")?.jsonPrimitive?.int ?: -1
-        val message = body["data"]?.jsonObject?.get("message")?.jsonPrimitive?.content ?: ""
+        val code = body["data"]?.asObject()?.get("code")?.jsonPrimitive?.intOrNull ?: -1
+        val message = body["data"]?.asObject()?.get("message")?.jsonPrimitive?.content ?: ""
         LogUtil.d(TAG, "pollLogin: code=$code message=$message")
         if (code == 0) {
             // 登录成功：从会话 Cookie 提取并持久化
@@ -138,11 +142,11 @@ class BiliApiClient(
                 LogUtil.w(TAG, "validateAndGetMid: 接口失败")
                 return@withContext null
             }
-        if (body["code"]?.jsonPrimitive?.int != 0) {
+        if (body["code"]?.jsonPrimitive?.intOrNull != 0) {
             LogUtil.w(TAG, "validateAndGetMid: Cookie 失效 code=${body["code"]}")
             return@withContext null
         }
-        val mid = body["data"]?.jsonObject?.get("mid")?.jsonPrimitive?.long
+        val mid = body["data"]?.asObject()?.get("mid")?.jsonPrimitive?.longOrNull
         LogUtil.d(TAG, "validateAndGetMid: 有效 mid=$mid")
         mid?.let { sessionCookies["DedeUserID"] = it.toString() }
         mid
@@ -172,17 +176,17 @@ class BiliApiClient(
                 "$apiBaseUrl/x/v3/fav/folder/created/list-all",
                 mapOf("up_mid" to mid.toString(), "platform" to "web", "pn" to page.toString(), "ps" to "20")
             ) ?: break
-            if (body["code"]?.jsonPrimitive?.int != 0) {
+            if (body["code"]?.jsonPrimitive?.intOrNull != 0) {
                 LogUtil.w(TAG, "getFolders: 第 $page 页错误码 ${body["code"]}")
                 break
             }
-            val list = body["data"]?.jsonObject?.get("list") as? JsonArray ?: break
+            val list = body["data"]?.asObject()?.get("list") as? JsonArray ?: break
             for (item in list) {
-                val obj = item.jsonObject
+                val obj = item as? JsonObject ?: continue
                 result += Folder(
-                    mediaId = obj["id"]?.jsonPrimitive?.long ?: 0,
+                    mediaId = obj["id"]?.jsonPrimitive?.longOrNull ?: 0,
                     title = obj["title"]?.jsonPrimitive?.content ?: "",
-                    mediaCount = obj["media_count"]?.jsonPrimitive?.int ?: 0,
+                    mediaCount = obj["media_count"]?.jsonPrimitive?.intOrNull ?: 0,
                 )
             }
             LogUtil.d(TAG, "getFolders: 第 $page 页 ${list.size} 条，累计 ${result.size}")
@@ -222,24 +226,28 @@ class BiliApiClient(
                 LogUtil.w(TAG, "getFolderVideos: mediaId=$mediaId page=$page 网络异常")
                 return@withContext FolderVideosPage(emptyList(), "网络异常", 0, 0)
             }
-            val code = body["code"]?.jsonPrimitive?.int
+            val code = body["code"]?.jsonPrimitive?.intOrNull
             if (code != 0) {
                 val msg = body["message"]?.jsonPrimitive?.content ?: "错误码 $code"
                 LogUtil.w(TAG, "getFolderVideos: mediaId=$mediaId page=$page 错误码 $code: $msg")
                 return@withContext FolderVideosPage(emptyList(), msg, 0, 0)
             }
-            val data = body["data"]?.jsonObject
-            val totalCount = data?.get("info")?.jsonObject?.get("media_count")?.jsonPrimitive?.int
-                ?: data?.get("media_count")?.jsonPrimitive?.int ?: 0
+            val data = body["data"]?.asObject()
+            val totalCount = data?.get("info")?.asObject()?.get("media_count")?.jsonPrimitive?.intOrNull
+                ?: data?.get("media_count")?.jsonPrimitive?.intOrNull ?: 0
             val medias = data?.get("medias") as? JsonArray ?: JsonArray(emptyList())
             val videos = medias.mapNotNull { item ->
-                val obj = item.jsonObject
+                val obj = item as? JsonObject ?: return@mapNotNull null
                 val bvid = obj["bvid"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                // 收藏夹接口不返回顶层 cid：普通视频的首页 cid 位于 ugc.first_cid
+                val cid = obj["ugc"]?.asObject()?.get("first_cid")?.jsonPrimitive?.longOrNull
+                    ?: obj["cid"]?.jsonPrimitive?.longOrNull
+                    ?: 0L
                 VideoInfo(
                     bvid = bvid,
                     title = obj["title"]?.jsonPrimitive?.content ?: "",
-                    cid = obj["cid"]?.jsonPrimitive?.int ?: 0,
-                    avid = obj["id"]?.jsonPrimitive?.long ?: 0,
+                    cid = cid,
+                    avid = obj["id"]?.jsonPrimitive?.longOrNull ?: 0,
                     page = 1,
                 )
             }
@@ -259,17 +267,42 @@ class BiliApiClient(
     )
 
     /**
+     * 通过 `/x/player/pagelist` 获取视频首页 cid。
+     * 作为收藏夹接口未返回 `ugc.first_cid` 时的兜底（避免 playurl 传 cid=0 报 -400）。
+     */
+    suspend fun getVideoFirstCid(bvid: String): Long? = withContext(Dispatchers.IO) {
+        val body = getJson(
+            "$apiBaseUrl/x/player/pagelist",
+            mapOf("bvid" to bvid),
+        ) ?: return@withContext null
+        if (body["code"]?.jsonPrimitive?.intOrNull != 0) {
+            LogUtil.w(TAG, "getVideoFirstCid: bvid=$bvid 错误码 ${body["code"]}")
+            return@withContext null
+        }
+        val pages = body["data"] as? JsonArray ?: return@withContext null
+        val cid = pages.firstOrNull()?.asObject()?.get("cid")?.jsonPrimitive?.longOrNull
+        LogUtil.d(TAG, "getVideoFirstCid: bvid=$bvid cid=$cid")
+        cid
+    }
+
+    /**
      * 获取 DASH 播放地址（`1.py#L314`：/x/player/playurl，fnval=16）。
      * @param qn 目标清晰度（80=1080P）
      * @return null 表示无可用流或接口失败
      */
-    suspend fun getVideoUrl(bvid: String, cid: Int, qn: Int): PlayUrlData? = withContext(Dispatchers.IO) {
-        LogUtil.d(TAG, "getVideoUrl: bvid=$bvid cid=$cid qn=$qn")
+    suspend fun getVideoUrl(bvid: String, cid: Long, qn: Int): PlayUrlData? = withContext(Dispatchers.IO) {
+        // cid 缺失（收藏夹接口既无 ugc.first_cid 也无 cid）时兜底解析，避免 playurl 传 cid=0 报 -400
+        val realCid = if (cid > 0L) cid else (getVideoFirstCid(bvid) ?: 0L)
+        if (realCid <= 0L) {
+            LogUtil.w(TAG, "getVideoUrl: bvid=$bvid 无法解析 cid，放弃")
+            return@withContext null
+        }
+        LogUtil.d(TAG, "getVideoUrl: bvid=$bvid cid=$realCid qn=$qn")
         val body = getJson(
             "$apiBaseUrl/x/player/playurl",
             mapOf(
                 "bvid" to bvid,
-                "cid" to cid.toString(),
+                "cid" to realCid.toString(),
                 "qn" to qn.toString(),
                 "fnver" to "0",
                 "fnval" to "16",
@@ -278,15 +311,15 @@ class BiliApiClient(
             LogUtil.w(TAG, "getVideoUrl: bvid=$bvid 接口失败")
             return@withContext null
         }
-        if (body["code"]?.jsonPrimitive?.int != 0) {
+        if (body["code"]?.jsonPrimitive?.intOrNull != 0) {
             LogUtil.w(TAG, "getVideoUrl: bvid=$bvid 错误码 ${body["code"]}")
             return@withContext null
         }
-        val data = body["data"]?.jsonObject ?: run {
+        val data = body["data"]?.asObject() ?: run {
             LogUtil.w(TAG, "getVideoUrl: bvid=$bvid 无 data")
             return@withContext null
         }
-        val dash = data["dash"]?.jsonObject ?: run {
+        val dash = data["dash"]?.asObject() ?: run {
             LogUtil.w(TAG, "getVideoUrl: bvid=$bvid 无 dash 流")
             return@withContext null
         }
@@ -298,7 +331,7 @@ class BiliApiClient(
 
         val videoStream = pickVideoStream(videos, qn)
         val videoUrl = videoStream.url ?: return@withContext null
-        val audioUrl = audios.firstOrNull()?.jsonObject?.get("baseUrl")?.jsonPrimitive?.content
+        val audioUrl = audios.firstOrNull()?.asObject()?.get("baseUrl")?.jsonPrimitive?.content
         LogUtil.d(
             TAG,
             "getVideoUrl: bvid=$bvid 选中视频流 quality=${videoStream.quality} needVip=${videoStream.needVip} 音频流=${audioUrl != null}"
@@ -312,10 +345,10 @@ class BiliApiClient(
     }
 
     private fun pickVideoStream(videos: JsonArray, qn: Int): Stream {
-        val parsed = videos.map { item ->
-            val obj = item.jsonObject
+        val parsed = videos.mapNotNull { item ->
+            val obj = item as? JsonObject ?: return@mapNotNull null
             Stream(
-                quality = obj["id"]?.jsonPrimitive?.int ?: 0,
+                quality = obj["id"]?.jsonPrimitive?.intOrNull ?: 0,
                 url = obj["baseUrl"]?.jsonPrimitive?.content ?: obj["base_url"]?.jsonPrimitive?.content,
             )
         }.filter { it.url != null }
@@ -342,11 +375,11 @@ class BiliApiClient(
             .header("Referer", "https://space.bilibili.com")
             .post(form.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
             .build()
-        val body = execute(request)?.jsonObject ?: run {
+        val body = execute(request)?.asObject() ?: run {
             LogUtil.w(TAG, "deleteFolderVideo: mediaId=$mediaId avid=$avid 接口失败")
             return@withContext false
         }
-        val ok = body["code"]?.jsonPrimitive?.int == 0
+        val ok = body["code"]?.jsonPrimitive?.intOrNull == 0
         LogUtil.d(TAG, "deleteFolderVideo: mediaId=$mediaId avid=$avid 结果=$ok")
         ok
     }
@@ -356,7 +389,7 @@ class BiliApiClient(
     suspend fun ensureBuvid() {
         if (sessionCookies.containsKey("buvid3")) return
         val body = getJson("$apiBaseUrl/x/frontend/finger/spi")
-        val data = body?.get("data")?.jsonObject ?: return
+        val data = body?.get("data")?.asObject() ?: return
         data["b_3"]?.jsonPrimitive?.content?.let { sessionCookies["buvid3"] = it }
         data["b_4"]?.jsonPrimitive?.content?.let { sessionCookies["buvid4"] = it }
         LogUtil.d(TAG, "ensureBuvid: buvid3=${sessionCookies.containsKey("buvid3")} buvid4=${sessionCookies.containsKey("buvid4")}")
@@ -372,14 +405,26 @@ class BiliApiClient(
     }
 
     private fun execute(request: Request): JsonObject? {
+        val reqBody = runCatching {
+            request.body?.let { b ->
+                val buf = okio.Buffer()
+                b.writeTo(buf)
+                buf.readUtf8()
+            }
+        }.getOrNull().orEmpty()
+        LogUtil.d(TAG, "REQ ${request.method} ${request.url}" + if (reqBody.isNotBlank()) " body=$reqBody" else "")
         return try {
             client.newCall(request).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                LogUtil.d(TAG, "RESP ${resp.code} ${request.method} ${request.url} body=$text")
                 if (!resp.isSuccessful) return null
-                json.parseToJsonElement(resp.body?.string() ?: return null) as? JsonObject
+                json.parseToJsonElement(text) as? JsonObject
             }
         } catch (e: IOException) {
+            LogUtil.w(TAG, "REQ FAIL ${request.method} ${request.url} IO异常: ${e.message}")
             null
         } catch (e: Exception) {
+            LogUtil.w(TAG, "REQ FAIL ${request.method} ${request.url} 异常: ${e.message}")
             null
         }
     }

@@ -96,6 +96,22 @@ class WebDavClientTest {
     }
 
     @Test
+    fun `exists 远端存在返回 true`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(207).setBody("<multistatus/>"))
+        assertTrue(client.exists(baseUrl(), "bili_folder_downloader/1.zip", "u", "p"))
+        val request = server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)!!
+        assertEquals("PROPFIND", request.method)
+        assertEquals("/dav/bili_folder_downloader/1.zip", request.path)
+        assertEquals("0", request.getHeader("Depth"))
+    }
+
+    @Test
+    fun `exists 远端不存在返回 false`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertFalse(client.exists(baseUrl(), "bili_folder_downloader/1.zip", "u", "p"))
+    }
+
+    @Test
     fun `内嵌凭证优先于配置`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(207).setBody("<multistatus/>"))
         val url = baseUrl().replace("http://", "http://embedded:secret@")

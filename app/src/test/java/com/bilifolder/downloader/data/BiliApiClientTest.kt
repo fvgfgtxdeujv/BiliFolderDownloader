@@ -149,6 +149,38 @@ class BiliApiClientTest {
         assertEquals(false, ok)
     }
 
+    @Test
+    fun `getFolderVideos 优先解析 ugc first_cid`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"code":0,"data":{"info":{"media_count":1},"medias":[{"bvid":"BV1","title":"t","id":1,"ugc":{"first_cid":1466178228}}]}}"""
+            )
+        )
+        val page = client.getFolderVideos(1L, 1)
+        assertEquals(1, page.videos.size)
+        assertEquals(1466178228L, page.videos.first().cid)
+    }
+
+    @Test
+    fun `getFolderVideos first_cid 超出 Int 范围时不崩溃`() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"code":0,"data":{"info":{"media_count":1},"medias":[{"bvid":"BV1","title":"t","id":1,"ugc":{"first_cid":39950746790}}]}}"""
+            )
+        )
+        val page = client.getFolderVideos(1L, 1)
+        assertEquals(1, page.videos.size)
+        assertEquals(39950746790L, page.videos.first().cid)
+    }
+
+    @Test
+    fun `getFolderVideos 回退解析顶层 cid`() = runBlocking {
+        server.enqueue(folderPage(2, 2))
+        val page = client.getFolderVideos(1L, 1)
+        assertEquals(2, page.videos.size)
+        assertEquals(2L, page.videos[1].cid)
+    }
+
     private fun folderPage(count: Int, total: Int): MockResponse {
         val items = (1..count).joinToString(",") { i ->
             """{"bvid":"BV$i","title":"视频$i","cid":$i,"id":$i}"""

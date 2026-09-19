@@ -22,7 +22,7 @@ class GopeedTaskClientTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
-        client = GopeedTaskClient(server.url("/").toString().trimEnd('/'), "test-token")
+        client = GopeedTaskClient(HttpGopeedTransport(server.url("/").toString().trimEnd('/'), "test-token"))
     }
 
     @After
@@ -47,6 +47,26 @@ class GopeedTaskClientTest {
         val body = request.body.readUtf8()
         assertTrue(body.contains("v.mp4"))
         assertTrue(body.contains("/data"))
+    }
+
+    @Test
+    fun `createTask 把请求头写入 extra`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody("""{"code":0,"message":"success","data":"task-h"}""")
+        )
+        client.createTask(
+            "https://cn.example.bilivideo.com/v.m4s",
+            "/data",
+            "v.m4s",
+            mapOf("User-Agent" to "UA-1", "Referer" to "https://www.bilibili.com/"),
+        )
+        val body = server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)!!.body.readUtf8()
+        assertTrue(body.contains("\"extra\""))
+        assertTrue(body.contains("\"header\""))
+        assertTrue(body.contains("\"User-Agent\":\"UA-1\""))
+        assertTrue(body.contains("Referer"))
     }
 
     @Test
@@ -114,6 +134,27 @@ class GopeedTaskClientTest {
     }
 
     @Test
+    fun `queryTask meta 为 null 时总大小为 0 且不崩溃`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """{"code":0,"data":{"id":"task-3","status":"ready","progress":{"downloaded":0},"meta":null}}"""
+                )
+        )
+        val state = client.queryTask("task-3")
+        assertNotNull(state)
+        assertEquals(GopeedTaskClient.GopeedTaskStatus.READY, state!!.status)
+        assertEquals(0L, state.total)
+    }
+
+    @Test
+    fun `queryTask data 为 null 时返回 null`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"code":0,"data":null}"""))
+        assertNull(client.queryTask("task-x"))
+    }
+
+    @Test
     fun `pause resume delete 调用正确端点`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"code":0}"""))
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"code":0}"""))
@@ -134,7 +175,7 @@ class GopeedTaskClientTest {
     @Test
     fun `healthCheck 网络异常返回 false`() = runBlocking {
         server.shutdown()
-        val badClient = GopeedTaskClient("http://127.0.0.1:1", "t")
+        val badClient = GopeedTaskClient(HttpGopeedTransport("http://127.0.0.1:1", "t"))
         assertFalse(badClient.healthCheck())
     }
 }

@@ -33,6 +33,8 @@ class AppContainer(context: Context) {
      * 协程在 IO 线程抢先运行会触发 getRecordStore() 的 delegate NPE。
      */
     fun start() {
+        // 网络监听常驻：下载页在启动服务前据此判断当前网络类型（断网/移动数据）
+        networkMonitor.start()
         scope.launch {
             val enabled = recordStore.debugLogEnabled.first()
             LogUtil.setDebugOverride(enabled)

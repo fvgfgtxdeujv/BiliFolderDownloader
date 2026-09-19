@@ -7,26 +7,24 @@ import com.bilifolder.downloader.data.model.EngineStatus
 import com.bilifolder.downloader.data.model.EngineTask
 import com.bilifolder.downloader.data.model.EngineTaskKind
 import com.bilifolder.downloader.util.LogUtil
+import com.gopeed.libgopeed.Libgopeed
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InputStream
-import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 /**
  * Gopeed 引擎（设计 4.2.2，需求 6、15、19）。
  *
- * 职责：
- * - 首次使用时把 assets/gopeed/gopeed-arm64 解压到 filesDir/gopeed/ 并赋予可执行权限
- * - 以子进程方式启动 headless 服务（`--address 127.0.0.1:<port> --token <token> --storage-dir <dir>`），
- *   通过 [GopeedTaskClient] 走 REST API 创建/查询/控制任务
- * - 进程退出时清理子进程
+ * 以进程内原生库方式运行：通过 gomobile 绑定（`com.gopeed.libgopeed.Libgopeed`）在
+ * 当前进程内启动 Gopeed 运行时，随后经 [NativeGopeedTransport] 直接调用其内部 REST
+ * dispatch 创建/查询/控制任务。
+ *
+ * 之所以不再以子进程方式执行外部二进制：Android 10+ 的 SELinux 禁止在应用数据目录
+ * 执行可执行文件（`exec` 返回 EACCES），进程内 so 是唯一可行且更省资源的形态。
  *
  * 限速：Gopeed 当前版本已移除带宽限速，[supportsLimit] = false，[setLimit] 为空操作
  * （需求 5 第 6 条：设置页对 Gopeed 禁用限速项并提示）。
@@ -39,145 +37,69 @@ class GopeedEngine(
 
     override val supportsLimit: Boolean = false
 
-    /** 序列化子进程启动/停止，避免并发重复启动 */
+    /** 序列化 native 启动/停止，避免并发重复启动 */
     private val lifecycleLock = Mutex()
 
     @Volatile
-    private var process: Process? = null
+    private var started = false
 
     @Volatile
     private var taskClient: GopeedTaskClient? = null
 
-    /** 进程输出消费线程（防管道阻塞） */
-    private var outputPump: Thread? = null
-
     // ---------- 生命周期 ----------
 
-    /** 解压内嵌二进制（幂等） */
-    suspend fun ensureBinaryExtracted(): Boolean = withContext(Dispatchers.IO) {
-        val target = binaryFile()
-        if (target.exists() && target.length() > 0 && target.canExecute()) {
-            LogUtil.d(TAG, "ensureBinaryExtracted: 已存在 ${target.absolutePath}")
-            return@withContext true
-        }
+    override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         try {
-            target.parentFile?.mkdirs()
-            val input: InputStream = appContext.assets.open(ASSET_PATH)
-            val output = FileOutputStream(target)
-            input.copyTo(output)
-            output.flush()
-            output.close()
-            input.close()
-            target.setExecutable(true, false)
-            val ok = target.length() > 0
-            LogUtil.d(TAG, "ensureBinaryExtracted: 解压完成 size=${target.length()}")
-            ok
-        } catch (e: Exception) {
-            LogUtil.e(TAG, "ensureBinaryExtracted: 解压失败", e)
+            // 触发绑定类初始化（其 static 块会 System.loadLibrary("gojni")）；
+            // 加载成功即代表当前设备 ABI 可用。
+            Libgopeed.touch()
+            true
+        } catch (t: Throwable) {
+            // 记录失败原因与设备 ABI，便于从导出日志直接定位
+            LogUtil.e(
+                TAG,
+                "isAvailable: native 库加载失败: ${t.message} abi=${Build.SUPPORTED_ABIS.contentToString()}",
+                t,
+            )
             false
         }
     }
 
-    override suspend fun isAvailable(): Boolean {
-        if (!ensureBinaryExtracted()) return false
-        return withContext(Dispatchers.IO) {
-            try {
-                val proc = ProcessBuilder(binaryFile().absolutePath, "--version")
-                    .redirectErrorStream(true)
-                    .start()
-                val finished = proc.waitFor(10, TimeUnit.SECONDS)
-                if (!finished) {
-                    LogUtil.w(TAG, "isAvailable: --version 超时")
-                    proc.destroy()
-                    return@withContext false
-                }
-                val ok = proc.exitValue() == 0
-                LogUtil.d(TAG, "isAvailable: exit=${proc.exitValue()} ok=$ok")
-                ok
-            } catch (e: IOException) {
-                // 记录失败原因与设备 ABI，便于从导出日志直接定位
-                // （exec 拒绝多为 noexec/SELinux 的 Permission denied，架构不符为 Exec format error）
-                LogUtil.e(
-                    TAG,
-                    "isAvailable: 执行失败: ${e.message} abi=${Build.SUPPORTED_ABIS.contentToString()}",
-                    e,
-                )
-                false
-            }
-        }
-    }
-
     /**
-     * 启动 headless 服务（幂等：进程存活时直接复用）。
-     * @throws IOException 启动失败或健康检查超时
+     * 启动进程内运行时（幂等：已启动时直接复用）。
+     * @throws IOException 启动失败
      */
     suspend fun start() = lifecycleLock.withLock {
-        if (process?.isAlive == true) {
-            LogUtil.d(TAG, "start: 进程已存活，复用")
+        if (started) {
+            LogUtil.d(TAG, "start: 进程内引擎已启动，复用")
             return@withLock
         }
-        val binary = binaryFile()
-        val port = (20000..60000).random()
-        val token = UUID.randomUUID().toString().replace("-", "")
-        val storageDir = File(appContext.filesDir, "gopeed-data").absolutePath
-        val cmd = listOf(
-            binary.absolutePath,
-            "--address", "127.0.0.1:$port",
-            "--token", token,
-            "--storage-dir", storageDir,
-        )
-        LogUtil.d(TAG, "start: 启动 headless 端口=$port storage=$storageDir")
-        val proc = try {
-            ProcessBuilder(cmd).redirectErrorStream(true).start()
-        } catch (e: IOException) {
-            LogUtil.e(TAG, "start: 进程启动失败", e)
-            throw IOException("Gopeed 进程启动失败: ${e.message}", e)
-        }
-        // 消费 stdout/stderr，避免管道写满阻塞子进程
-        outputPump = Thread {
+        val storageDir = File(appContext.filesDir, STORAGE_DIR_REL).apply { mkdirs() }.absolutePath
+        // storage=bolt 使任务列表持久化到 storageDir；其余地址/令牌由 native 模式内部管理
+        val cfg = JSONObject()
+            .put("storage", "bolt")
+            .put("storageDir", storageDir)
+            .toString()
+        withContext(Dispatchers.IO) {
             try {
-                proc.inputStream.bufferedReader().forEachLine { line ->
-                    // 日志仅用于排障；不包含令牌等敏感信息
-                    LogUtil.d(TAG, "gopeed: $line")
-                }
-            } catch (e: IOException) {
-                // 进程退出后管道关闭属正常
+                Libgopeed.start(cfg)
+            } catch (t: Throwable) {
+                LogUtil.e(TAG, "start: native 启动失败", t)
+                throw IOException("Gopeed 引擎启动失败: ${t.message}", t)
             }
-        }.apply { isDaemon = true; start() }
-
-        val client = GopeedTaskClient("http://127.0.0.1:$port", token)
-        // 健康检查：最长 10s
-        var ok = false
-        repeat(50) {
-            if (!proc.isAlive) return@repeat
-            if (client.healthCheck()) {
-                ok = true
-                return@repeat
-            }
-            delay(200)
         }
-        if (!ok) {
-            LogUtil.e(TAG, "start: 健康检查超时")
-            proc.destroy()
-            process = null
-            throw IOException("Gopeed 服务健康检查超时")
-        }
-        LogUtil.d(TAG, "start: headless 就绪")
-        process = proc
-        taskClient = client
+        taskClient = GopeedTaskClient(NativeGopeedTransport)
+        started = true
+        LogUtil.d(TAG, "start: 进程内引擎就绪 storage=$storageDir")
     }
 
-    /** 停止子进程（应用退出/引擎切换时调用） */
+    /** 停止进程内运行时（应用退出/引擎切换时调用） */
     override fun shutdown() {
-        LogUtil.d(TAG, "shutdown: 停止子进程")
-        process?.let { p ->
-            if (p.isAlive) {
-                p.destroy()
-                runCatching { p.waitFor(3, TimeUnit.SECONDS) }
-                if (p.isAlive) p.destroyForcibly()
-            }
-        }
-        process = null
+        if (!started) return
+        LogUtil.d(TAG, "shutdown: 停止进程内引擎")
+        runCatching { Libgopeed.stop() }
+            .onFailure { LogUtil.w(TAG, "shutdown: stop 异常", it) }
+        started = false
         taskClient = null
     }
 
@@ -190,7 +112,7 @@ class GopeedEngine(
         val target = File(savePath)
         val dir = target.parent ?: throw IOException("无效保存路径: $savePath")
         val name = fileName.ifBlank { target.name }
-        val taskId = client.createTask(uri, dir, name)
+        val taskId = client.createTask(uri, dir, name, MediaRequestHeaders.MAP)
             ?: throw IOException("Gopeed 创建任务失败")
         LogUtil.d(TAG, "download: 任务创建成功 taskId=$taskId")
         return EngineTask(taskId, EngineTaskKind.FILE, savePath)
@@ -218,13 +140,8 @@ class GopeedEngine(
     /** Gopeed 不支持限速（需求 5 第 6 条） */
     override fun setLimit(bytesPerSec: Long) = Unit
 
-    // ---------- 内部 ----------
-
-    private fun binaryFile(): File = File(appContext.filesDir, BINARY_REL_PATH)
-
     private companion object {
         const val TAG = "GopeedEngine"
-        const val ASSET_PATH = "gopeed/gopeed-arm64"
-        const val BINARY_REL_PATH = "gopeed/gopeed-arm64"
+        const val STORAGE_DIR_REL = "gopeed-data"
     }
 }

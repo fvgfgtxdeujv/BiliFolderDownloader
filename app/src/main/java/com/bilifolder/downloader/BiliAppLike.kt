@@ -23,7 +23,7 @@ import java.io.File
  * - `:tinker` 补丁合成进程：只跑 Tinker 合成 service，不构建容器（避免日志库/存储被双开）
  *
  * 本地补丁加载约定：把补丁包命名为 `patch.apk` 放入 `filesDir/tinker_local/`
- * （debug 版可经 MT 管理器 DocumentsProvider 写入；正式版后续接下载通道），
+ * （正式版可在设置页经 SAF 选择后由 `PatchInstaller` 写入），
  * 冷启动后自动提交给 Tinker 合成加载，无需重装 APK。
  */
 class BiliAppLike(

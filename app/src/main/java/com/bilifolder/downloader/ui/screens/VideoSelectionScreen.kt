@@ -2,6 +2,7 @@ package com.bilifolder.downloader.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -29,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bilifolder.downloader.data.NetworkMonitor
 import com.bilifolder.downloader.data.model.DownloadEngineType
 import com.bilifolder.downloader.data.model.Folder
 import com.bilifolder.downloader.data.model.VideoInfo
@@ -77,6 +81,7 @@ fun VideoSelectionScreen(
 
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var hint by remember { mutableStateOf<String?>(null) }
+    var showMobileDataDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(mediaId) {
         viewModel.loadFolderVideos(mediaId, folderTitle)
@@ -84,6 +89,20 @@ fun VideoSelectionScreen(
 
     val mediaCount = folderMeta?.second ?: videos.size
     val selectAll = videos.isNotEmpty() && selected.size == videos.size
+
+    /** 组装请求并启动下载服务 */
+    fun startDownload() {
+        val folder = Folder(
+            mediaId = mediaId,
+            title = folderTitle,
+            mediaCount = mediaCount,
+        )
+        val request = DownloadService.DownloadRequestDto(
+            folder = folder,
+            selected = selected.toList(),
+        )
+        onStartDownload(listOf(request))
+    }
 
     Scaffold(
         topBar = {
@@ -98,36 +117,27 @@ fun VideoSelectionScreen(
         },
         bottomBar = {
             Column(modifier = Modifier.padding(16.dp)) {
-                TaskConfigPanel(
-                    settings = settings,
-                    engineType = engineType,
-                    gopeedAvailable = gopeedAvailable,
-                    autoUpload = webDavConfig.autoUpload,
-                    onLimitChange = { limit -> viewModel.updateSettings { it.copy(limitKbps = limit) } },
-                    onQualityChange = { qn -> viewModel.updateSettings { it.copy(quality = qn) } },
-                    onDeleteChange = { v -> viewModel.updateSettings { it.copy(deleteAfterDownload = v) } },
-                    onWifiOnlyChange = { v -> viewModel.updateSettings { it.copy(wifiOnly = v) } },
-                    onEngineChange = { t -> viewModel.setEngineType(t) },
-                    onAutoUploadChange = { v -> viewModel.setWebDavConfig(webDavConfig.copy(autoUpload = v)) },
-                )
-                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = {
                         if (selected.isEmpty()) {
                             hint = "请先勾选至少一个视频"
                             return@Button
                         }
-                        hint = null
-                        val folder = Folder(
-                            mediaId = mediaId,
-                            title = folderTitle,
-                            mediaCount = mediaCount,
-                        )
-                        val request = DownloadService.DownloadRequestDto(
-                            folder = folder,
-                            selected = selected.toList(),
-                        )
-                        onStartDownload(listOf(request))
+                        val network = viewModel.container.networkMonitor.networkState.value
+                        when {
+                            network == NetworkMonitor.NetworkState.DISCONNECTED ->
+                                hint = "当前无网络，请检查网络连接后重试"
+
+                            network == NetworkMonitor.NetworkState.CELLULAR && settings.mobileDataPrompt -> {
+                                hint = null
+                                showMobileDataDialog = true
+                            }
+
+                            else -> {
+                                hint = null
+                                startDownload()
+                            }
+                        }
                     },
                     enabled = !loading && videos.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth(),
@@ -162,28 +172,32 @@ fun VideoSelectionScreen(
                 )
                 videos.isEmpty() -> Text("收藏夹为空", modifier = Modifier.padding(16.dp))
                 else -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("共 $mediaCount 个视频", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.weight(1f))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("全选")
-                            Checkbox(
-                                checked = selectAll,
-                                onCheckedChange = { checked ->
-                                    selected = if (checked) videos.map { it.bvid }.toSet() else emptySet()
-                                },
-                            )
-                        }
-                    }
+                    // 整页可上下滑动：配置面板作为列表最后一项，避免底部栏过高被裁掉
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
+                        contentPadding = PaddingValues(bottom = 16.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("共 $mediaCount 个视频", style = MaterialTheme.typography.bodyMedium)
+                                Spacer(Modifier.weight(1f))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("全选")
+                                    Checkbox(
+                                        checked = selectAll,
+                                        onCheckedChange = { checked ->
+                                            selected = if (checked) videos.map { it.bvid }.toSet() else emptySet()
+                                        },
+                                    )
+                                }
+                            }
+                        }
                         items(videos, key = { it.bvid }) { video ->
                             VideoRow(
                                 video = video,
@@ -193,10 +207,49 @@ fun VideoSelectionScreen(
                                 },
                             )
                         }
+                        item {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                TaskConfigPanel(
+                                    settings = settings,
+                                    engineType = engineType,
+                                    gopeedAvailable = gopeedAvailable,
+                                    autoUpload = webDavConfig.autoUpload,
+                                    onLimitChange = { limit -> viewModel.updateSettings { it.copy(limitKbps = limit) } },
+                                    onQualityChange = { qn -> viewModel.updateSettings { it.copy(quality = qn) } },
+                                    onDeleteChange = { v -> viewModel.updateSettings { it.copy(deleteAfterDownload = v) } },
+                                    onWifiOnlyChange = { v -> viewModel.updateSettings { it.copy(wifiOnly = v) } },
+                                    onEngineChange = { t -> viewModel.setEngineType(t) },
+                                    onAutoUploadChange = { v -> viewModel.setWebDavConfig(webDavConfig.copy(autoUpload = v)) },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    if (showMobileDataDialog) {
+        AlertDialog(
+            onDismissRequest = { showMobileDataDialog = false },
+            title = { Text("使用移动数据下载？") },
+            text = { Text("当前未连接 WiFi，继续下载将使用移动数据，可能产生流量费用。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showMobileDataDialog = false
+                        startDownload()
+                    },
+                ) {
+                    Text("继续")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMobileDataDialog = false }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 }
 

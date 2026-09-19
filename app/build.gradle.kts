@@ -26,8 +26,13 @@ android {
         applicationId = "com.bilifolder.downloader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 15
+        versionName = "1.0.14"
+
+        // Gopeed 引擎的 gomobile 绑定仅提供 arm64-v8a（下载引擎本就只支持 arm64）
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -77,6 +82,11 @@ android {
             excludes += "/META-INF/NOTICE.md"
             // BC 的 PQC 抗量子算法参数（本项目仅用 CMS/RSA/AES-GCM，PQC 参数纯浪费 ~1.2MB）
             excludes += "org/bouncycastle/pqc/**"
+        }
+        jniLibs {
+            // libgojni.so（Gopeed 引擎）未压缩约 45MB、压缩后约 15MB；
+            // 采用安装期解压以显著缩小 APK（Gopeed 运行时时长常驻，解压一次成本可忽略）。
+            useLegacyPackaging = true
         }
     }
 
@@ -138,6 +148,8 @@ dependencies {
     implementation(libs.bouncycastle.pkix)
     // Tinker 热修复运行时（含 loader，提供 TinkerApplication / ApplicationLike / 补丁合成）
     implementation(libs.tinker.android.lib)
+    // Gopeed 下载引擎的进程内 gomobile 绑定（com.gopeed.libgopeed，arm64-v8a）
+    implementation(files("libs/libgopeed.aar"))
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)

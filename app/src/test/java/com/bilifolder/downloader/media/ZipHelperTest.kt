@@ -80,6 +80,23 @@ class ZipHelperTest {
     }
 
     @Test
+    fun `zipFiles 指定源且不删除源文件时成品保留`() {
+        val dir = tempFolder.root
+        val out = File(dir, "out").apply { mkdirs() }
+        val a = createMp4(dir, "a.mp4")
+        val b = createMp4(dir, "b.mp4")
+
+        val result = ZipHelper.zipFiles(listOf(a, b), out, deleteSources = false)
+
+        assertNotNull(result.zipFile)
+        assertEquals(2, result.fileCount)
+        assertNull(result.error)
+        assertTrue(File(out, "1.zip").exists())
+        assertTrue(a.exists())
+        assertTrue(b.exists())
+    }
+
+    @Test
     fun `nextZipFile 编号跳过已存在`() {
         val dir = tempFolder.root
         File(dir, "1.zip").writeBytes(byteArrayOf(1))

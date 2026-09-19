@@ -9,7 +9,7 @@ import kotlinx.serialization.Serializable
 data class VideoInfo(
     val bvid: String,
     val title: String,
-    val cid: Int,
+    val cid: Long,
     val avid: Long = 0,
     val page: Int = 1,
 )

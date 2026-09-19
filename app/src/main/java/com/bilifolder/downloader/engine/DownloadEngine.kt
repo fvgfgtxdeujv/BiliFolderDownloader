@@ -24,7 +24,7 @@ interface DownloadEngine {
     /**
      * 引擎是否可用。
      * - 内置引擎：始终 true。
-     * - Gopeed 引擎：二进制检测通过（存在、可执行、可运行）才返回 true。
+     * - Gopeed 引擎：进程内 native 库加载成功才返回 true。
      */
     suspend fun isAvailable(): Boolean
 
@@ -53,4 +53,20 @@ interface DownloadEngine {
 
     /** 释放引擎资源（停止子进程等） */
     fun shutdown()
+}
+
+/**
+ * B 站媒体 CDN（bilivideo.com）必需请求头。
+ *
+ * 实测：无请求头或仅带 Referer 均返回 403，必须携带浏览器 User-Agent（配合 Referer）
+ * 才能取到 206/200；Gopeed 默认 UA 为 "gopeed"，会被 CDN 拒绝，故建任务时需显式下发。
+ */
+object MediaRequestHeaders {
+    const val USER_AGENT: String =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    const val REFERER: String = "https://www.bilibili.com/"
+
+    val MAP: Map<String, String>
+        get() = mapOf("User-Agent" to USER_AGENT, "Referer" to REFERER)
 }

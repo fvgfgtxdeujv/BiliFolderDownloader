@@ -32,13 +32,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bilifolder.downloader.BuildConfig
 import com.bilifolder.downloader.data.model.Folder
 import com.bilifolder.downloader.ui.MainViewModel
+import com.bilifolder.downloader.util.DebugDbUploader
+import kotlinx.coroutines.launch
 
 /**
  * 收藏夹选择页（设计 4.7.3，需求 3）。
@@ -63,8 +68,15 @@ fun FolderScreen(
     var loaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(lastMid) {
-        if (lastMid > 0 && midInput.isBlank()) {
-            midInput = lastMid.toString()
+        if (lastMid > 0) {
+            if (midInput.isBlank()) {
+                midInput = lastMid.toString()
+            }
+            // 已登录/已记录 MID 时直接进入即加载，避免用户面对空列表无从下手
+            if (!loaded) {
+                loaded = true
+                viewModel.loadFolders(lastMid)
+            }
         }
     }
 
@@ -109,8 +121,42 @@ fun FolderScreen(
                             viewModel.loadFolders(mid)
                         }
                     },
+                    enabled = midInput.isNotBlank(),
                 ) {
                     Text("加载")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            // 开发版专用：一键把当前调试日志 db 上传到内置 WebDAV，便于真机取证
+            if (BuildConfig.DEBUG) {
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+                val configured = remember { DebugDbUploader.isConfigured(context) }
+                var uploading by remember { mutableStateOf(false) }
+                var uploadMsg by remember { mutableStateOf<String?>(null) }
+                Button(
+                    onClick = {
+                        uploading = true
+                        uploadMsg = null
+                        scope.launch {
+                            uploadMsg = DebugDbUploader.uploadDb(context, viewModel.container.webDavClient)
+                            uploading = false
+                        }
+                    },
+                    enabled = !uploading && configured,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (uploading) "上传中…" else "上传调试日志 db")
+                }
+                val hint = uploadMsg ?: if (!configured) "未配置 assets/debug_webdav.properties" else null
+                hint?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (it.startsWith("上传成功")) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error,
+                    )
                 }
             }
             Spacer(Modifier.height(8.dp))

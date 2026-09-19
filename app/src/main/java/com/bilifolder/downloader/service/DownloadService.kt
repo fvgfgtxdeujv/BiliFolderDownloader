@@ -7,8 +7,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import androidx.core.app.ServiceCompat
 import com.bilifolder.downloader.BiliApp
 import com.bilifolder.downloader.MainActivity
 import com.bilifolder.downloader.R
@@ -27,7 +29,7 @@ import kotlinx.serialization.json.Json
 /**
  * 下载前台服务（设计 4.7，需求 10、11）。
  *
- * - `mediaProcessing` 前台服务类型（Android 14+ 强制，不受 dataSync 时长限制）
+ * - 前台服务类型 `dataSync`（API 29+ 通用；不受 mediaProcessing 的版本限制）
  * - 常驻通知实时显示进度与当前视频标题，提供"停止"动作（ACTION_STOP）
  * - 停止时置停止标记，协程安全退出，保留已完成文件
  *
@@ -70,6 +72,9 @@ class DownloadService : Service() {
 
     private lateinit var notificationManager: NotificationManager
 
+    /** 最近一次的总体进度文案，与当前文件进度拼接后展示在通知里 */
+    private var overallText: String = ""
+
     override fun onCreate() {
         super.onCreate()
         LogUtil.d(TAG, "onCreate")
@@ -83,12 +88,26 @@ class DownloadService : Service() {
                 when (event) {
                     is DownloadManager.DownloadEvent.Progress -> {
                         val title = event.currentTitle ?: ""
-                        val text = if (event.total > 0) {
+                        overallText = if (event.total > 0) {
                             "已处理 ${event.done}/${event.total}：$title"
                         } else {
                             title
                         }
-                        updateNotification("下载中…", text, false)
+                        updateNotification("下载中…", overallText, false, null)
+                    }
+                    is DownloadManager.DownloadEvent.FileProgress -> {
+                        val percent = if (event.total > 0) {
+                            (event.downloaded * 100 / event.total).toInt().coerceIn(0, 100)
+                        } else {
+                            null
+                        }
+                        val fileText = if (percent != null) {
+                            "${event.label} $percent%"
+                        } else {
+                            "正在下载 ${event.label}…"
+                        }
+                        val text = if (overallText.isBlank()) fileText else "$overallText · $fileText"
+                        updateNotification("下载中…", text, false, percent)
                     }
                     is DownloadManager.DownloadEvent.Finished -> {
                         updateNotification(
@@ -129,7 +148,7 @@ class DownloadService : Service() {
                         selectedBvids = it.selected.takeIf { s -> s.isNotEmpty() }?.toSet(),
                     )
                 }
-                startForeground(NOTIFICATION_ID, buildNotification("准备下载…", "", false))
+                startForegroundCompat()
                 manager.start(downloadRequests)
             }
             ACTION_STOP -> {
@@ -151,6 +170,29 @@ class DownloadService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    // ---------- 前台服务 ----------
+
+    /**
+     * 启动前台服务。
+     *
+     * 统一使用 `dataSync` 类型：API 29 起即可用，API 34/35 均受支持，跨系统版本稳定。
+     * （`mediaProcessing` 是 API 35 新增类型，旧系统不识别会导致
+     * `InvalidForegroundServiceTypeException`，故不再使用。）
+     */
+    private fun startForegroundCompat() {
+        val notification = buildNotification("准备下载…", "", false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
     // ---------- 通知 ----------
 
     private fun createNotificationChannel() {
@@ -167,7 +209,12 @@ class DownloadService : Service() {
         }
     }
 
-    private fun buildNotification(title: String, text: String, done: Boolean): Notification {
+    private fun buildNotification(
+        title: String,
+        text: String,
+        done: Boolean,
+        progressPercent: Int? = null,
+    ): Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
@@ -186,7 +233,7 @@ class DownloadService : Service() {
             @Suppress("DEPRECATION")
             androidx.core.app.NotificationCompat.Builder(this)
         }
-        return builder
+        builder
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(text)
@@ -195,16 +242,23 @@ class DownloadService : Service() {
             .setOnlyAlertOnce(true)
             .addAction(0, "停止", stopIntent)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
-            .build()
+        // 有字节级进度时展示确定性进度条，否则不显示
+        if (progressPercent != null) {
+            builder.setProgress(100, progressPercent, false)
+        }
+        return builder.build()
     }
 
-    private fun updateNotification(title: String, text: String, done: Boolean) {
-        if (done) {
-            notificationManager.notify(NOTIFICATION_ID, buildNotification(title, text, true))
-        } else {
-            // 前台服务运行期间直接复用前台通知
-            notificationManager.notify(NOTIFICATION_ID, buildNotification(title, text, false))
-        }
+    private fun updateNotification(
+        title: String,
+        text: String,
+        done: Boolean,
+        progressPercent: Int? = null,
+    ) {
+        notificationManager.notify(
+            NOTIFICATION_ID,
+            buildNotification(title, text, done, progressPercent),
+        )
     }
 
     private fun stopForegroundInternal() {

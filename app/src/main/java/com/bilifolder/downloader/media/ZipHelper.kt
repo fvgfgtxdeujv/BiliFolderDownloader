@@ -13,7 +13,8 @@ import java.util.zip.ZipOutputStream
  *
  * - 通过 `File.listFiles()` 扫描下载目录下全部 `.mp4`，找下一个可用编号（`1.zip`、`2.zip`…）
  * - `ZipOutputStream` 打包（`ZIP_STORED` 不压缩，对应 `1.py#L1039`，MP4 已高度压缩）
- * - 打包后用 `ZipInputStream` 逐条目校验 CRC，全部通过后删除源 MP4（对应 `1.py#L1046-L1057`）
+ * - 打包后用 `ZipInputStream` 逐条目校验 CRC；[zipFiles] 的 `deleteSources` 控制是否删除源文件
+ *   （成品需保留在公共 Movies 目录时为 false）
  * - 校验失败保留源文件，返回失败原因
  */
 object ZipHelper {
@@ -26,20 +27,39 @@ object ZipHelper {
         val error: String? = null,
     )
 
-    /** 打包目录下全部 mp4；无 mp4 时返回 null */
-    fun zipDirectory(directory: File): ZipResult {
+    /** 打包目录下全部 mp4；无 mp4 时返回 null（默认打包后删除源文件） */
+    fun zipDirectory(
+        directory: File,
+        outputDir: File = directory,
+        deleteSources: Boolean = true,
+    ): ZipResult {
         if (!directory.isDirectory) return ZipResult(null, error = "目录不存在: ${directory.path}")
         val mp4s = directory.listFiles { f -> f.isFile && f.name.endsWith(".mp4", ignoreCase = true) }
             ?.sortedBy { it.name.lowercase() }
             .orEmpty()
+        return zipFiles(mp4s, outputDir, deleteSources)
+    }
+
+    /**
+     * 打包指定的文件列表（通常为本次任务新下载的成品）。
+     * @param deleteSources 打包并校验成功后是否删除源文件；成品需保留在公共目录时为 false
+     */
+    fun zipFiles(
+        sources: List<File>,
+        outputDir: File,
+        deleteSources: Boolean = true,
+    ): ZipResult {
+        val mp4s = sources.filter { it.isFile && it.name.endsWith(".mp4", ignoreCase = true) }
+            .sortedBy { it.name.lowercase() }
         if (mp4s.isEmpty()) {
-            LogUtil.d(TAG, "zipDirectory: 无 mp4，跳过打包")
+            LogUtil.d(TAG, "zipFiles: 无 mp4，跳过打包")
             return ZipResult(null)
         }
-        LogUtil.d(TAG, "zipDirectory: 打包 ${mp4s.size} 个 mp4 到 ${directory.path}")
+        if (!outputDir.isDirectory) outputDir.mkdirs()
+        LogUtil.d(TAG, "zipFiles: 打包 ${mp4s.size} 个 mp4 到 ${outputDir.path}")
 
-        val zipFile = nextZipFile(directory)
-        LogUtil.d(TAG, "zipDirectory: 目标 $zipFile")
+        val zipFile = nextZipFile(outputDir)
+        LogUtil.d(TAG, "zipFiles: 目标 $zipFile")
         try {
             FileOutputStream(zipFile).use { fos ->
                 ZipOutputStream(fos).use { zos ->
@@ -53,7 +73,7 @@ object ZipHelper {
                         zos.putNextEntry(entry)
                         FileInputStream(mp4).use { it.copyTo(zos) }
                         zos.closeEntry()
-                        LogUtil.d(TAG, "zipDirectory: 已写入 ${mp4.name} (${mp4.length()}B)")
+                        LogUtil.d(TAG, "zipFiles: 已写入 ${mp4.name} (${mp4.length()}B)")
                     }
                 }
             }
@@ -69,8 +89,10 @@ object ZipHelper {
             LogUtil.e(TAG, "打包后校验失败: $crcError")
             return ZipResult(zipFile, error = crcError)
         }
-        for (mp4 in mp4s) {
-            runCatching { mp4.delete() }
+        if (deleteSources) {
+            for (mp4 in mp4s) {
+                runCatching { mp4.delete() }
+            }
         }
         LogUtil.d(TAG, "打包完成: ${zipFile.name} 共 ${mp4s.size} 个文件")
         return ZipResult(zipFile, fileCount = mp4s.size)

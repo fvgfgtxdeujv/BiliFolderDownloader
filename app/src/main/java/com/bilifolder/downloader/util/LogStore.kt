@@ -80,6 +80,13 @@ class LogStore(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_V
         }
     }
 
+    /** 清空全部日志（开发版每次启动调用，只保留本次会话） */
+    fun clear() {
+        synchronized(lock) {
+            runCatching { writableDatabase.delete(TABLE, null, null) }
+        }
+    }
+
     fun shutdown() {
         runCatching { close() }
     }

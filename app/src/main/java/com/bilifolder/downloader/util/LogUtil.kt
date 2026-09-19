@@ -68,6 +68,10 @@ object LogUtil {
         logStore = runCatching { LogStore(context.applicationContext) }.getOrNull()
         logsDir = dir
         if (logStore != null) {
+            // 开发版：每次启动清空历史日志，db 里只保留本次打开后的记录
+            if (BuildConfig.DEBUG) {
+                runCatching { logStore?.clear() }
+            }
             insertLine(Log.INFO, TAG, "日志数据库已初始化：${dir.absolutePath}")
             startCleanupThread()
         }

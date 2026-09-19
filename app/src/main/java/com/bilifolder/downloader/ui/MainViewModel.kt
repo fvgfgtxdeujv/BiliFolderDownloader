@@ -27,6 +27,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val container: AppContainer get() = BiliApp.container
 
+    private companion object {
+        const val TAG = "MainViewModel"
+    }
+
     // ---------- 登录态（需求 1、2） ----------
 
     private val _isLoggedIn = MutableStateFlow(container.cookieStore.mid() != null)
@@ -46,6 +50,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isLoggedIn.value = container.cookieStore.mid() != null
     }
 
+    /**
+     * 登录成功后的统一收尾（扫码 / WebView 两条路径都会调用）。
+     *
+     * 关键：把当前登录用户的 mid 写入 [DownloadRecordStore]，供收藏夹页自动带入并加载。
+     * 优先经 `/x/web-interface/nav` 校验拿到权威 mid（同时把 DedeUserID 写回会话），
+     * 网络异常时回退到已持久化的 mid。
+     */
+    fun onLoginSucceeded() {
+        viewModelScope.launch {
+            val mid = container.biliApiClient.validateAndGetMid()
+                ?: container.cookieStore.mid()?.toLongOrNull()
+            if (mid != null && mid > 0L) {
+                LogUtil.d(TAG, "onLoginSucceeded: 登录用户 mid=$mid")
+                container.recordStore.setLastMid(mid)
+            } else {
+                LogUtil.w(TAG, "onLoginSucceeded: 未取得有效 mid")
+            }
+            refreshLoginState()
+        }
+    }
+
     // ---------- 收藏夹（需求 3） ----------
 
     private val _folders = MutableStateFlow<List<Folder>>(emptyList())
@@ -61,12 +86,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _foldersLoading.value = true
             _foldersError.value = null
+            // 无论接口结果如何都记住本次 mid，保证收藏夹页下次能自动带入并加载
+            container.recordStore.setLastMid(mid)
             val result = container.biliApiClient.getFolders(mid)
             if (result.isEmpty()) {
-                _foldersError.value = "未获取到收藏夹（检查 MID 是否正确）"
+                _folders.value = emptyList()
+                _foldersError.value = "未获取到收藏夹（该账号可能没有收藏夹，或 MID 不存在）"
             } else {
                 _folders.value = result
-                container.recordStore.setLastMid(mid)
             }
             _foldersLoading.value = false
         }

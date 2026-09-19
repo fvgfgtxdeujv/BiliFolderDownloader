@@ -35,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bilifolder.downloader.data.model.DownloadEngineType
 import com.bilifolder.downloader.ui.MainViewModel
@@ -162,6 +164,31 @@ fun SettingsScreen(
                 }
             }
 
+            // ---------- 网络提醒（需求 15） ----------
+            Spacer(Modifier.height(12.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("下载网络", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("移动数据下载提醒", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "开始下载时若正在使用移动数据，弹窗确认是否继续",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = settings.mobileDataPrompt,
+                            onCheckedChange = { checked ->
+                                viewModel.updateSettings { it.copy(mobileDataPrompt = checked) }
+                            },
+                        )
+                    }
+                }
+            }
+
             // ---------- WebDAV（需求 20、21） ----------
             Spacer(Modifier.height(12.dp))
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -250,6 +277,58 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("保存设置")
+                    }
+                }
+            }
+            // ---------- 补丁包（Tinker 热修复，正式版） ----------
+            Spacer(Modifier.height(12.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("补丁更新", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "选择 Tinker 补丁包（.apk），提交合成后重启应用生效",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    val context = LocalContext.current
+                    var patchMsg by remember { mutableStateOf<String?>(null) }
+                    var patchSubmitting by remember { mutableStateOf(false) }
+                    val patchPicker = rememberLauncherForActivityResult(
+                        ActivityResultContracts.OpenDocument(),
+                    ) { uri ->
+                        if (uri == null) {
+                            patchMsg = "未选择文件"
+                        } else {
+                            patchSubmitting = true
+                            scope.launch {
+                                patchMsg = com.bilifolder.downloader.util.PatchInstaller.submit(context, uri)
+                                patchSubmitting = false
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            patchMsg = null
+                            patchPicker.launch(
+                                arrayOf(
+                                    "application/vnd.android.package-archive",
+                                    "application/octet-stream",
+                                ),
+                            )
+                        },
+                        enabled = !patchSubmitting,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (patchSubmitting) "提交中…" else "选择补丁包")
+                    }
+                    patchMsg?.let {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

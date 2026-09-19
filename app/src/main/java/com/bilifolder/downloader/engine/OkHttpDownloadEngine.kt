@@ -134,19 +134,26 @@ class OkHttpDownloadEngine(
                 delay(500)
                 continue
             }
-            val requestBuilder = Request.Builder().url(t.uri)
+            val requestBuilder = Request.Builder()
+                .url(t.uri)
+                // bilivideo CDN 需要浏览器 UA + Referer，否则 403
+                .header("User-Agent", MediaRequestHeaders.USER_AGENT)
+                .header("Referer", MediaRequestHeaders.REFERER)
             // 断点续传：携带 Range 头（对应 1.py#L739-L742）
             if (downloaded > 0) {
                 requestBuilder.header("Range", "bytes=$downloaded-")
             }
             val request = requestBuilder.build()
+            LogUtil.d(TAG, "REQ GET ${request.url}" + if (downloaded > 0) " Range: bytes=$downloaded-" else "")
             val resp = try {
                 client.newCall(request).execute()
             } catch (e: IOException) {
                 t.status = EngineStatus.ERROR
                 t.error = "网络异常: ${e.message}"
+                LogUtil.w(TAG, "REQ FAIL GET ${request.url} 网络异常: ${e.message}")
                 return
             }
+            LogUtil.d(TAG, "RESP ${resp.code} ${request.url} len=${resp.body?.contentLength() ?: -1L}")
 
             when (resp.code) {
                 200 -> {

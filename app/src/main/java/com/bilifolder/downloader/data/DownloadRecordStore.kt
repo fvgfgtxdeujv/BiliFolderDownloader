@@ -38,6 +38,7 @@ class DownloadRecordStore(context: Context) {
         val QUALITY = intPreferencesKey("quality")                // 默认 80 (1080P)
         val DELETE_AFTER_DOWNLOAD = booleanPreferencesKey("delete_after_download")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
+        val MOBILE_DATA_PROMPT = booleanPreferencesKey("mobile_data_prompt")
         val RETRY_COUNT = intPreferencesKey("retry_count")
         val ENGINE_TYPE = stringPreferencesKey("engine_type")
         val WEBDAV_CONFIG = stringPreferencesKey("webdav_config")
@@ -66,6 +67,7 @@ class DownloadRecordStore(context: Context) {
             quality = p[Keys.QUALITY] ?: 80,
             deleteAfterDownload = p[Keys.DELETE_AFTER_DOWNLOAD] ?: false,
             wifiOnly = p[Keys.WIFI_ONLY] ?: false,
+            mobileDataPrompt = p[Keys.MOBILE_DATA_PROMPT] ?: true,
             retryCount = p[Keys.RETRY_COUNT] ?: 2,
         )
     }
@@ -78,6 +80,7 @@ class DownloadRecordStore(context: Context) {
             p[Keys.QUALITY] = updated.quality
             p[Keys.DELETE_AFTER_DOWNLOAD] = updated.deleteAfterDownload
             p[Keys.WIFI_ONLY] = updated.wifiOnly
+            p[Keys.MOBILE_DATA_PROMPT] = updated.mobileDataPrompt
             p[Keys.RETRY_COUNT] = updated.retryCount
         }
     }
@@ -160,12 +163,13 @@ class DownloadRecordStore(context: Context) {
 }
 
 /**
- * 下载设置聚合（限速/清晰度/删除/仅 WiFi/重试）。
+ * 下载设置聚合（限速/清晰度/删除/仅 WiFi/移动数据提醒/重试）。
  */
 data class DownloadSettings(
     val limitKbps: Int = 100,
     val quality: Int = 80,
     val deleteAfterDownload: Boolean = false,
     val wifiOnly: Boolean = false,
+    val mobileDataPrompt: Boolean = true,
     val retryCount: Int = 2,
 )

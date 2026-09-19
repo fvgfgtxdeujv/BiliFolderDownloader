@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
  * - `testConnection()`：`PROPFIND`（Depth: 0），2xx 判定连接可用
  * - `mkdir(remoteDir)`：递归 `MKCOL` 建目录
  * - `uploadZip(...)`：流式 `PUT` 上传 zip，自定义 RequestBody 按读入字节上报进度
+ * - `exists(...)`：`PROPFIND`（Depth: 0），2xx 判定远端文件存在（上传后确认用）
  *
  * 失败归类：401/403 = 配置错误（UI 提示检查账号）；其余 = 可重试（保留本地 zip）。
  */
@@ -144,6 +145,30 @@ class WebDavClient {
             UploadResult.FAILED
         }
     }
+
+    /**
+     * 远端文件是否存在：PROPFIND Depth: 0，2xx（含 207 Multi-Status）即存在。
+     *
+     * 用于上传后二次确认，确认远端已落盘再删除本地 zip。
+     */
+    suspend fun exists(baseUrl: String, remotePath: String, username: String, password: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val cred = parseEmbeddedCredentials(baseUrl, username, password)
+            val request = Request.Builder()
+                .url(buildUrl(cred.url, remotePath))
+                .header("Authorization", authHeader(cred.username, cred.password))
+                .method("PROPFIND", RequestBody.create(null, ""))
+                .header("Depth", "0")
+                .build()
+            try {
+                val ok = client.newCall(request).execute().use { it.code in 200..299 }
+                LogUtil.d(TAG, "exists: $remotePath 结果=$ok")
+                ok
+            } catch (e: IOException) {
+                LogUtil.w(TAG, "exists: $remotePath 网络异常", e)
+                false
+            }
+        }
 
     /** 兼容 `https://user:pass@host/path` 内嵌凭证；内嵌存在时优先，否则用配置 */
     private fun parseEmbeddedCredentials(url: String, configUser: String, configPass: String): Cred {

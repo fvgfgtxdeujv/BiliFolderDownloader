@@ -1,6 +1,7 @@
 package com.bilifolder.downloader.media
 
 import android.media.MediaExtractor
+import android.media.MediaFormat
 import com.bilifolder.downloader.util.LogUtil
 import java.io.File
 
@@ -34,7 +35,19 @@ object PlaybackVerifier {
                 LogUtil.w(TAG, "verify: 无媒体轨道 $path")
                 return "无媒体轨道"
             }
-            val buffer = java.nio.ByteBuffer.allocateDirect(1 shl 20)
+            // MediaExtractor 必须先选中轨道，readSampleData 才会返回数据（否则恒为 -1）
+            val videoTrack = (0 until extractor.trackCount).firstOrNull { i ->
+                extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+                    ?.startsWith("video/") == true
+            }
+            val trackIndex = videoTrack ?: 0
+            extractor.selectTrack(trackIndex)
+            LogUtil.d(TAG, "verify: 选中轨道 $trackIndex/${extractor.trackCount}")
+            val maxInput = runCatching {
+                extractor.getTrackFormat(trackIndex).getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+            }.getOrDefault(0)
+            val bufferSize = maxInput.coerceIn(1 shl 20, 16 shl 20)
+            val buffer = java.nio.ByteBuffer.allocateDirect(bufferSize)
             var sampleCount = 0
             var lastTimeUs = 0L
             while (true) {
