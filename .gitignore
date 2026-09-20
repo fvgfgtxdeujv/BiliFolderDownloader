@@ -1,5 +1,6 @@
 # 桌面辅助脚本（含 WebDAV 明文凭据，不纳入版本控制）
 webdav_123pan.py
+webdav_*.py
 __pycache__/
 
 # 开发版调试 WebDAV 凭据（外置配置文件，明文，不纳入版本控制）
@@ -29,5 +30,14 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+# 签名文件与私钥（一律不入库）
 *.keystore
 *.jks
+*.jceks
+*.p12
+*.pfx
+*.key
+*.pepk
+keystore.properties
+signing.properties
+secrets.properties
