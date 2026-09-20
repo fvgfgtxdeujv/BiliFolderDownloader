@@ -156,11 +156,13 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
-                    LimitOption("不限速", limit == 0, engineType != DownloadEngineType.GOPEED) { limit = 0 }
-                    LimitOption("100 KB/s", limit == 100, engineType != DownloadEngineType.GOPEED) { limit = 100 }
-                    LimitOption("300 KB/s", limit == 300, engineType != DownloadEngineType.GOPEED) { limit = 300 }
-                    LimitOption("500 KB/s", limit == 500, engineType != DownloadEngineType.GOPEED) { limit = 500 }
-                    LimitOption("1 MB/s", limit == 1000, engineType != DownloadEngineType.GOPEED) { limit = 1000 }
+                    val limitOptions = listOf(0 to "不限速", 100 to "100 KB/s", 300 to "300 KB/s", 500 to "500 KB/s", 1000 to "1 MB/s")
+                    limitOptions.forEach { (value, label) ->
+                        LimitOption(label, limit == value, engineType != DownloadEngineType.GOPEED) {
+                            limit = value
+                            viewModel.updateSettings { it.copy(limitKbps = value) }
+                        }
+                    }
                 }
             }
 
@@ -272,7 +274,6 @@ fun SettingsScreen(
                     Button(
                         onClick = {
                             saveConfig()
-                            viewModel.updateSettings { it.copy(limitKbps = limit) }
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {

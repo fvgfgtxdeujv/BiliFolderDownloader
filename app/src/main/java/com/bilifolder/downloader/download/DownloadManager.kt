@@ -263,6 +263,9 @@ class DownloadManager(
 
         val settings = recordStore.settings.first()
 
+        // 应用全局限速（0 = 不限速，单位 KB/s）
+        engine.setLimit(settings.limitKbps.toLong() * 1024L)
+
         var done = 0
         var success = 0
         var failed = 0
