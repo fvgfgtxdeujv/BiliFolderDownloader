@@ -24,6 +24,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bilifolder.downloader.data.model.DownloadEngineType
 import com.bilifolder.downloader.ui.MainViewModel
 import android.content.Intent
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -65,16 +67,23 @@ fun SettingsScreen(
     var webdavUrl by remember { mutableStateOf("") }
     var webdavUser by remember { mutableStateOf("") }
     var webdavPass by remember { mutableStateOf("") }
+    var autoUpload by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     var limit by remember { mutableStateOf(100) }
+    var webDavLoaded by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(webDavConfig) {
-        webdavUrl = webDavConfig.url
-        webdavUser = webDavConfig.username
+    // 仅在进入页面时从持久化配置加载一次，避免切换自动上传等配置变更触发重载、
+    // 覆盖用户正在编辑的地址/账号/密码（未保存内容）。
+    LaunchedEffect(Unit) {
+        val cfg = viewModel.container.recordStore.webDavConfig.first()
+        webdavUrl = cfg.url
+        webdavUser = cfg.username
         webdavPass = viewModel.container.cookieStore.webDavPassword() ?: ""
+        autoUpload = cfg.autoUpload
+        webDavLoaded = true
     }
     LaunchedEffect(settings) { limit = settings.limitKbps }
 
@@ -83,10 +92,16 @@ fun SettingsScreen(
             com.bilifolder.downloader.data.model.WebDavConfig(
                 url = webdavUrl.trim(),
                 username = webdavUser.trim(),
-                autoUpload = webDavConfig.autoUpload,
+                autoUpload = autoUpload,
             )
         )
         viewModel.container.cookieStore.saveWebDavPassword(webdavPass)
+    }
+
+    // 离开设置页（返回按钮或系统返回）时保存 WebDAV 输入，避免编辑后直接返回丢失。
+    // webDavLoaded 保证配置尚未加载完成就退出时不会写入空值覆盖原配置。
+    DisposableEffect(Unit) {
+        onDispose { if (webDavLoaded) saveConfig() }
     }
 
     Scaffold(
@@ -258,15 +273,12 @@ fun SettingsScreen(
                             modifier = Modifier.weight(1f),
                         )
                         Switch(
-                            checked = webDavConfig.autoUpload,
+                            checked = autoUpload,
                             onCheckedChange = { checked ->
-                                viewModel.setWebDavConfig(
-                                    com.bilifolder.downloader.data.model.WebDavConfig(
-                                        url = webdavUrl.trim(),
-                                        username = webdavUser.trim(),
-                                        autoUpload = checked,
-                                    )
-                                )
+                                autoUpload = checked
+                                // 只更新开关，地址/账号/密码待保存或离开页面时统一落盘，
+                                // 避免写入半途输入的地址却漏存密码造成配置不一致
+                                viewModel.setWebDavConfig(webDavConfig.copy(autoUpload = checked))
                             },
                         )
                     }
