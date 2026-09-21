@@ -64,11 +64,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (mid != null && mid > 0L) {
                 LogUtil.d(TAG, "onLoginSucceeded: 登录用户 mid=$mid")
                 container.recordStore.setLastMid(mid)
+                // 重新登录后收藏夹缓存作废，强制下次进入重新拉取
+                resetFolderCache()
             } else {
                 LogUtil.w(TAG, "onLoginSucceeded: 未取得有效 mid")
             }
             refreshLoginState()
         }
+    }
+
+    /** 清空收藏夹缓存与内存列表（退出登录时调用；重新登录路径见 [onLoginSucceeded]） */
+    fun clearFolderCache() {
+        viewModelScope.launch { resetFolderCache() }
+    }
+
+    private suspend fun resetFolderCache() {
+        container.folderCache.clear()
+        _folders.value = emptyList()
+        _folderVideos.value = emptyList()
+        _folderMeta.value = null
+        _foldersError.value = null
+        _videosError.value = null
     }
 
     // ---------- 收藏夹（需求 3） ----------
@@ -82,18 +98,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _foldersError = MutableStateFlow<String?>(null)
     val foldersError: StateFlow<String?> = _foldersError.asStateFlow()
 
-    fun loadFolders(mid: Long) {
+    /**
+     * 加载收藏夹列表。
+     *
+     * 缓存策略：命中当日缓存直接复用且不请求网络；跨天或 [force] 时后台刷新；
+     * 刷新期间若已有缓存则继续展示缓存、不显示加载态；刷新失败保留缓存并提示。
+     */
+    fun loadFolders(mid: Long, force: Boolean = false) {
         viewModelScope.launch {
-            _foldersLoading.value = true
-            _foldersError.value = null
             // 无论接口结果如何都记住本次 mid，保证收藏夹页下次能自动带入并加载
             container.recordStore.setLastMid(mid)
+            val cached = container.folderCache.folders(mid)
+            if (cached != null) {
+                _folders.value = cached.value
+                _foldersError.value = null
+            }
+            if (!force && cached != null && cached.isFresh()) {
+                _foldersLoading.value = false
+                LogUtil.d(TAG, "loadFolders: 命中当日缓存，跳过网络请求")
+                return@launch
+            }
+            _foldersLoading.value = cached == null
+            _foldersError.value = null
             val result = container.biliApiClient.getFolders(mid)
             if (result.isEmpty()) {
-                _folders.value = emptyList()
-                _foldersError.value = "未获取到收藏夹（该账号可能没有收藏夹，或 MID 不存在）"
+                if (cached == null) {
+                    _folders.value = emptyList()
+                    _foldersError.value = "未获取到收藏夹（该账号可能没有收藏夹，或 MID 不存在）"
+                } else {
+                    _foldersError.value = "刷新失败，当前显示的是缓存数据"
+                }
             } else {
                 _folders.value = result
+                container.folderCache.saveFolders(mid, result)
             }
             _foldersLoading.value = false
         }
@@ -113,20 +150,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _videosError = MutableStateFlow<String?>(null)
     val videosError: StateFlow<String?> = _videosError.asStateFlow()
 
-    fun loadFolderVideos(mediaId: Long, title: String) {
+    /**
+     * 加载收藏夹内视频（分页拉全量）。
+     *
+     * 缓存策略与 [loadFolders] 一致：命中当日缓存直接复用；跨天或 [force] 时后台刷新；
+     * 仅当整轮分页都成功时才写入缓存，避免把半截数据缓存下来。
+     */
+    fun loadFolderVideos(mediaId: Long, title: String, force: Boolean = false) {
         viewModelScope.launch {
-            _videosLoading.value = true
+            val cached = container.folderCache.videos(mediaId)
+            if (cached != null) {
+                _folderVideos.value = cached.value.videos
+                _folderMeta.value = cached.value.title.ifBlank { title } to cached.value.totalCount
+                _videosError.value = null
+            } else {
+                _folderMeta.value = title to 0
+            }
+            if (!force && cached != null && cached.isFresh()) {
+                _videosLoading.value = false
+                LogUtil.d(TAG, "loadFolderVideos: 命中当日缓存，跳过网络请求（mediaId=$mediaId）")
+                return@launch
+            }
+            _videosLoading.value = cached == null
             _videosError.value = null
-            _folderMeta.value = title to 0
             val videos = mutableListOf<VideoInfo>()
+            var totalCount = 0
+            var completed = true
             var page = 1
             while (true) {
                 val result = container.biliApiClient.getFolderVideos(mediaId, page)
                 if (result.error != null) {
                     _videosError.value = result.error
+                    completed = false
                     break
                 }
                 if (page == 1 && result.totalCount > 0) {
+                    totalCount = result.totalCount
                     _folderMeta.value = title to result.totalCount
                 }
                 videos += result.videos
@@ -134,8 +193,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 page += 1
                 kotlinx.coroutines.delay(1500)
             }
-            _folderVideos.value = videos
             _videosLoading.value = false
+            if (completed && videos.isNotEmpty()) {
+                _folderVideos.value = videos
+                container.folderCache.saveVideos(mediaId, title, if (totalCount > 0) totalCount else videos.size, videos)
+            } else if (cached == null) {
+                _folderVideos.value = videos
+            }
         }
     }
 

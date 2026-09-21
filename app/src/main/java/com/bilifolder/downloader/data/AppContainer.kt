@@ -75,6 +75,8 @@ class AppContainer(context: Context) {
 
     val recordStore: DownloadRecordStore by lazy { DownloadRecordStore(appContext) }
 
+    val folderCache: FolderCacheStore by lazy { FolderCacheStore(appContext) }
+
     val storageManager: StorageManager by lazy { StorageManager(appContext) }
 
     val networkMonitor: NetworkMonitor by lazy { NetworkMonitor(appContext) }

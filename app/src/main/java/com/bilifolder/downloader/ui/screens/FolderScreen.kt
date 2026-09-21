@@ -24,6 +24,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.runtime.Composable
@@ -85,6 +86,17 @@ fun FolderScreen(
             TopAppBar(
                 title = { Text("我的收藏夹") },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            val mid = midInput.toLongOrNull()?.takeIf { it > 0 } ?: lastMid
+                            if (mid > 0) {
+                                loaded = true
+                                viewModel.loadFolders(mid, force = true)
+                            }
+                        },
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "刷新收藏夹")
+                    }
                     IconButton(onClick = onOpenLibrary) {
                         Icon(Icons.Filled.VideoLibrary, contentDescription = "已下载")
                     }
@@ -165,19 +177,30 @@ fun FolderScreen(
                     CircularProgressIndicator(modifier = Modifier.padding(end = 8.dp))
                     Text("加载中…")
                 }
+                folders.isNotEmpty() -> {
+                    // 有缓存时即使刷新失败也优先展示缓存，仅在上方提示
+                    error?.let {
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(folders, key = { it.mediaId }) { folder ->
+                            FolderItem(folder = folder, onClick = { onOpenVideos(folder) })
+                        }
+                    }
+                }
                 error != null -> Text(
                     error ?: "",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                folders.isEmpty() && loaded -> Text("暂无收藏夹")
-                folders.isNotEmpty() -> LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(folders, key = { it.mediaId }) { folder ->
-                        FolderItem(folder = folder, onClick = { onOpenVideos(folder) })
-                    }
-                }
+                loaded -> Text("暂无收藏夹")
             }
         }
     }

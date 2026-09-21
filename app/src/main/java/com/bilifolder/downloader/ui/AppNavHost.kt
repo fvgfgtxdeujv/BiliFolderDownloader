@@ -100,6 +100,7 @@ fun AppNavHost(activity: Activity) {
                 onOpenLibrary = { navController.navigate(Routes.LIBRARY) },
                 onLogout = {
                     viewModel.container.cookieStore.clearSession()
+                    viewModel.clearFolderCache()
                     viewModel.refreshLoginState()
                     navController.navigate(Routes.LOGIN) { popUpTo(0) }
                 },

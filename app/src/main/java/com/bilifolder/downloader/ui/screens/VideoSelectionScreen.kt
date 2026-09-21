@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -113,6 +114,13 @@ fun VideoSelectionScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
+                actions = {
+                    IconButton(
+                        onClick = { viewModel.loadFolderVideos(mediaId, folderTitle, force = true) },
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "刷新视频列表")
+                    }
+                },
             )
         },
         bottomBar = {
@@ -165,7 +173,7 @@ fun VideoSelectionScreen(
                     Spacer(Modifier.padding(8.dp))
                     Text("加载视频…")
                 }
-                error != null -> Text(
+                error != null && videos.isEmpty() -> Text(
                     error ?: "",
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(16.dp),
@@ -179,6 +187,15 @@ fun VideoSelectionScreen(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         item {
+                            // 命中缓存时刷新失败：保留缓存列表，仅在上方提示
+                            error?.let {
+                                Text(
+                                    it,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
