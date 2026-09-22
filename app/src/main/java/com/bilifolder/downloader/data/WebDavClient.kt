@@ -111,7 +111,7 @@ class WebDavClient {
 
     /**
      * 流式上传 zip。
-     * @param remotePath 服务器端完整路径（如 bili_folder_downloader/20260821_xxx/1.zip）
+     * @param remotePath 服务器端完整路径（如 bili_folder_downloader/收藏夹名_20260821_101530.zip）
      * @param onProgress (已传字节, 总字节)
      */
     suspend fun uploadZip(

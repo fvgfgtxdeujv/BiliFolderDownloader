@@ -568,13 +568,13 @@ class DownloadManager(
         username: String,
         password: String,
     ): String? {
-        val remoteDir = buildUploadRemoteDir(folderName)
+        val remoteDir = UPLOAD_REMOTE_DIR
         if (!webDavClient.mkdir(url, remoteDir, username, password)) {
             LogUtil.w(TAG, "uploadAndConfirm: 目录创建失败 $remoteDir")
             emit(DownloadEvent.Log("WebDAV 目录创建失败，zip 已保留本地，可稍后重试"))
             return zipFile.absolutePath
         }
-        val remotePath = "$remoteDir/${zipFile.name}"
+        val remotePath = "$remoteDir/${buildUploadFileName(folderName)}"
         emit(DownloadEvent.Log("上传 zip 到 WebDAV…"))
         val result = webDavClient.uploadZip(url, remotePath, username, password, zipFile) { done, total ->
             emit(DownloadEvent.Log("上传进度：${done * 100 / total.coerceAtLeast(1)}%"))
@@ -603,10 +603,10 @@ class DownloadManager(
         return null
     }
 
-    private fun buildUploadRemoteDir(folderName: String): String {
-        val date = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
-        val safeName = storageManager.safeFileName(folderName)
-        return "bili_folder_downloader/${date}_$safeName"
+    /** 远端文件名：`<收藏夹名>_<时间戳>.zip`（时间戳为 yyyyMMdd_HHmmss） */
+    private fun buildUploadFileName(folderName: String): String {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        return "${storageManager.safeFileName(folderName)}_$stamp.zip"
     }
 
     /** 重试间隔递增：5s、15s、30s…（需求 5，设计 4.6.f） */
@@ -629,6 +629,9 @@ class DownloadManager(
      */
     companion object {
         const val TAG = "DownloadManager"
+
+        /** WebDAV 上传固定目录：`bili_folder_downloader/` */
+        const val UPLOAD_REMOTE_DIR = "bili_folder_downloader"
 
         fun filterCandidates(
             videos: List<VideoInfo>,
