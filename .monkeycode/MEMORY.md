@@ -71,3 +71,9 @@ Entries discovered by the Agent during task execution should follow this format:
   - 除非用户明确要求，否则只编译 release 变体（`assembleRelease`），不再默认同时编 debug。
   - 用户显式要求 debug 时才执行 debug 构建。
   - 发版流程仍按需上传 APK，但构建范围以上述规则为准。
+
+[User Instruction Summary]
+- Date: 2026-09-21
+- Context: 用户在多轮上传 APK 到 WebDAV 后提出上传命名约定
+- Instructions:
+  - 上传 APK 到 WebDAV 时只传带版本号的那一个（如 `app-release-v1.0.17.apk`），不要再传 `app-release.apk` 滚动位，避免重复文件。
