@@ -136,6 +136,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 主界面刷新：重新拉取收藏夹列表，并作废收藏夹内视频缓存，
+     * 让刷新范围覆盖“收藏夹里面的视频”（之后进入任一收藏夹都会重新拉取）。
+     */
+    fun refreshFolders(mid: Long) {
+        viewModelScope.launch {
+            container.folderCache.clearVideos()
+            _folderVideos.value = emptyList()
+            _folderMeta.value = null
+            _videosError.value = null
+            loadFolders(mid, force = true)
+        }
+    }
+
     // ---------- 收藏夹视频（需求 4、14） ----------
 
     private val _folderVideos = MutableStateFlow<List<VideoInfo>>(emptyList())

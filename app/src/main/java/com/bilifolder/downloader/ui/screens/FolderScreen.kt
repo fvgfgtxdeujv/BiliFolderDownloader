@@ -91,7 +91,8 @@ fun FolderScreen(
                             val mid = midInput.toLongOrNull()?.takeIf { it > 0 } ?: lastMid
                             if (mid > 0) {
                                 loaded = true
-                                viewModel.loadFolders(mid, force = true)
+                                // 同时作废收藏夹内视频缓存，刷新范围覆盖视频
+                                viewModel.refreshFolders(mid)
                             }
                         },
                     ) {

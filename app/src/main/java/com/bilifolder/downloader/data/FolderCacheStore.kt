@@ -48,7 +48,7 @@ class FolderCacheStore(context: Context) {
     )
 
     suspend fun folders(mid: Long): Cached<List<Folder>>? = withContext(Dispatchers.IO) {
-        val raw = readText(File(cacheDir, "folders_$mid.json")) ?: return@withContext null
+        val raw = readText(File(cacheDir, "$FOLDER_PREFIX$mid.json")) ?: return@withContext null
         runCatching { json.decodeFromString(FolderListCache.serializer(), raw) }
             .getOrNull()
             ?.let { Cached(it.folders, it.fetchedAt) }
@@ -56,11 +56,11 @@ class FolderCacheStore(context: Context) {
 
     suspend fun saveFolders(mid: Long, folders: List<Folder>) = withContext(Dispatchers.IO) {
         val cache = FolderListCache(System.currentTimeMillis(), folders)
-        writeText(File(cacheDir, "folders_$mid.json"), json.encodeToString(FolderListCache.serializer(), cache))
+        writeText(File(cacheDir, "$FOLDER_PREFIX$mid.json"), json.encodeToString(FolderListCache.serializer(), cache))
     }
 
     suspend fun videos(mediaId: Long): Cached<CachedVideos>? = withContext(Dispatchers.IO) {
-        val raw = readText(File(cacheDir, "videos_$mediaId.json")) ?: return@withContext null
+        val raw = readText(File(cacheDir, "$VIDEO_PREFIX$mediaId.json")) ?: return@withContext null
         runCatching { json.decodeFromString(FolderVideosCache.serializer(), raw) }
             .getOrNull()
             ?.let { Cached(CachedVideos(it.title, it.totalCount, it.videos), it.fetchedAt) }
@@ -69,12 +69,17 @@ class FolderCacheStore(context: Context) {
     suspend fun saveVideos(mediaId: Long, title: String, totalCount: Int, videos: List<VideoInfo>) =
         withContext(Dispatchers.IO) {
             val cache = FolderVideosCache(System.currentTimeMillis(), title, totalCount, videos)
-            writeText(File(cacheDir, "videos_$mediaId.json"), json.encodeToString(FolderVideosCache.serializer(), cache))
+            writeText(File(cacheDir, "$VIDEO_PREFIX$mediaId.json"), json.encodeToString(FolderVideosCache.serializer(), cache))
         }
 
     /** 清空全部缓存（重新登录/退出登录时调用） */
     suspend fun clear() = withContext(Dispatchers.IO) {
         cacheDir.listFiles()?.forEach { it.delete() }
+    }
+
+    /** 仅作废收藏夹内视频缓存（主界面刷新时调用，下次进入各收藏夹会重新拉取） */
+    suspend fun clearVideos() = withContext(Dispatchers.IO) {
+        cacheDir.listFiles { file -> file.name.startsWith(VIDEO_PREFIX) }?.forEach { it.delete() }
     }
 
     private fun readText(file: File): String? =
@@ -86,6 +91,8 @@ class FolderCacheStore(context: Context) {
 
     private companion object {
         const val CACHE_DIR = "folder_cache"
+        const val FOLDER_PREFIX = "folders_"
+        const val VIDEO_PREFIX = "videos_"
     }
 }
 
