@@ -169,10 +169,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * 缓存策略与 [loadFolders] 一致：命中当日缓存直接复用；跨天或 [force] 时后台刷新；
      * 仅当整轮分页都成功时才写入缓存，避免把半截数据缓存下来。
+     *
+     * [expectedCount] 为收藏夹列表里的视频数。当它与缓存里的数量不一致（例如在别的端删除了视频）
+     * 时，即使缓存还是当日数据也强制重新拉取，避免列表显示 0 个、点进去却还有旧视频。
      */
-    fun loadFolderVideos(mediaId: Long, title: String, force: Boolean = false) {
+    fun loadFolderVideos(mediaId: Long, title: String, force: Boolean = false, expectedCount: Int? = null) {
         viewModelScope.launch {
             val cached = container.folderCache.videos(mediaId)
+            val cachedCount = cached?.let { if (it.value.totalCount > 0) it.value.totalCount else it.value.videos.size }
+            val countMismatch = expectedCount != null && cachedCount != null && cachedCount != expectedCount
             if (cached != null) {
                 _folderVideos.value = cached.value.videos
                 _folderMeta.value = cached.value.title.ifBlank { title } to cached.value.totalCount
@@ -180,10 +185,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 _folderMeta.value = title to 0
             }
-            if (!force && cached != null && cached.isFresh()) {
+            if (!force && !countMismatch && cached != null && cached.isFresh()) {
                 _videosLoading.value = false
                 LogUtil.d(TAG, "loadFolderVideos: 命中当日缓存，跳过网络请求（mediaId=$mediaId）")
                 return@launch
+            }
+            if (countMismatch) {
+                LogUtil.d(TAG, "loadFolderVideos: 列表数量($expectedCount)与缓存($cachedCount)不一致，强制刷新（mediaId=$mediaId）")
             }
             _videosLoading.value = cached == null
             _videosError.value = null
@@ -208,8 +216,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 kotlinx.coroutines.delay(1500)
             }
             _videosLoading.value = false
-            if (completed && videos.isNotEmpty()) {
+            if (completed) {
+                // 拉取成功即以结果为准（包括空结果），避免残留已被删除的旧视频。
                 _folderVideos.value = videos
+                _folderMeta.value = title to (if (totalCount > 0) totalCount else videos.size)
                 container.folderCache.saveVideos(mediaId, title, if (totalCount > 0) totalCount else videos.size, videos)
             } else if (cached == null) {
                 _folderVideos.value = videos

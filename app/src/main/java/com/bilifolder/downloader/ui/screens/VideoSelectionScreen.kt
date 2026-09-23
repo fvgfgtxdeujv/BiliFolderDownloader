@@ -85,7 +85,8 @@ fun VideoSelectionScreen(
     var showMobileDataDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(mediaId) {
-        viewModel.loadFolderVideos(mediaId, folderTitle)
+        val expected = viewModel.folders.value.firstOrNull { it.mediaId == mediaId }?.mediaCount
+        viewModel.loadFolderVideos(mediaId, folderTitle, expectedCount = expected)
     }
 
     val mediaCount = folderMeta?.second ?: videos.size
