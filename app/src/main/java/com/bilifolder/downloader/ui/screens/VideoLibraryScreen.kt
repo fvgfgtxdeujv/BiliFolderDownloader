@@ -1,22 +1,17 @@
 package com.bilifolder.downloader.ui.screens
 
-import android.net.Uri
-import android.view.ViewGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -27,20 +22,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import com.bilifolder.downloader.data.VideoLibrary
 import com.bilifolder.downloader.ui.MainViewModel
 import java.text.SimpleDateFormat
@@ -123,7 +112,11 @@ fun VideoLibraryScreen(
     }
 
     playingFile?.let { item ->
-        VideoPlayerDialog(item = item, onDismiss = { playingFile = null })
+        VideoPlayerDialog(
+            file = item.file,
+            title = item.title,
+            onDismiss = { playingFile = null },
+        )
     }
 }
 
@@ -189,47 +182,6 @@ private fun HistoryRow(
             }
         }
     }
-}
-
-@Composable
-private fun VideoPlayerDialog(item: VideoLibrary.VideoItem, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val exoPlayer = remember(item) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(item.file)))
-            prepare()
-            playWhenReady = true
-        }
-    }
-    DisposableEffect(exoPlayer) {
-        onDispose { exoPlayer.release() }
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(item.title) },
-        text = {
-            AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        player = exoPlayer
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                        )
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(300.dp),
-            )
-        },
-        confirmButton = {
-            Button(onClick = onDismiss) { Text("关闭") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("返回") }
-        },
-    )
 }
 
 private fun formatSize(bytes: Long): String = when {

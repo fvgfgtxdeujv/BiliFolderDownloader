@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 下载调度器（设计 4.6，需求 4-10、14-16、19、21）。
@@ -93,6 +94,11 @@ class DownloadManager(
     /** 运行状态流：UI 据此在任务结束（含主动停止）后自动返回主页面 */
     val runningState: StateFlow<Boolean> = _running.asStateFlow()
 
+    private val _playbackPreparing = MutableStateFlow(false)
+
+    /** 是否正在准备单视频播放（下载/合并），用于与批量下载任务互斥 */
+    val playbackPreparing: StateFlow<Boolean> = _playbackPreparing.asStateFlow()
+
     @Volatile
     private var stopFlag = false
 
@@ -106,6 +112,11 @@ class DownloadManager(
         LogUtil.d(TAG, "start: 请求 ${requests.size} 个收藏夹")
         if (_running.value || requests.isEmpty()) {
             LogUtil.w(TAG, "start: 已运行或请求为空，忽略")
+            return
+        }
+        if (_playbackPreparing.value) {
+            LogUtil.w(TAG, "start: 正在准备播放，忽略批量下载")
+            emit(DownloadEvent.Log("正在准备播放，请稍后再开始下载"))
             return
         }
         if (cookieStore.biliJct().isNullOrEmpty()) {
@@ -272,7 +283,7 @@ class DownloadManager(
         selected.forEachIndexed { index, video ->
             if (stopFlag) return@forEachIndexed
             emit(DownloadEvent.Progress(done, mediaCount, video.title))
-            val ok = processVideo(video, folder, engine, settings, produced)
+            val ok = processVideo(video, folder, engine, settings, produced) != null
             if (ok) success++ else failed++
             done++
             emit(DownloadEvent.Progress(done, mediaCount, video.title))
@@ -294,7 +305,8 @@ class DownloadManager(
         engine: DownloadEngine,
         settings: com.bilifolder.downloader.data.DownloadSettings,
         produced: MutableList<File>,
-    ): Boolean {
+        onProgress: ((stage: String, downloaded: Long, total: Long) -> Unit)? = null,
+    ): File? {
         val safeTitle = storageManager.safeFileName(video.title)
         // 分片写应用专属目录，成品写公共 Movies（相册/文件管理器可见）
         val videoFile = File(storageManager.tempDir, "${safeTitle}_video.mp4")
@@ -304,7 +316,7 @@ class DownloadManager(
         val retryCount = settings.retryCount.coerceIn(0, 5)
         LogUtil.d(TAG, "processVideo: 「${video.title}」开始，bvid=${video.bvid} cid=${video.cid} 清晰度=${settings.quality} 重试上限=$retryCount")
         for (attempt in 0..retryCount) {
-            if (stopFlag) return false
+            if (stopFlag) return null
             emit(DownloadEvent.Log("下载：${video.title}（第 ${attempt + 1} 次尝试）"))
 
             // 取播放地址（按所选清晰度）
@@ -312,7 +324,7 @@ class DownloadManager(
             if (play == null) {
                 LogUtil.w(TAG, "processVideo: 「${video.title}」获取播放地址失败")
                 emit(DownloadEvent.Log("获取播放地址失败：${video.title}"))
-                if (attempt >= retryCount) return false
+                if (attempt >= retryCount) return null
                 delay(retryDelay(attempt))
                 continue
             }
@@ -328,18 +340,18 @@ class DownloadManager(
             }
 
             // 下载视频流 + 音频流（并行）
-            val videoOk = downloadStream(engine, play.videoUrl, videoFile, settings, "视频流")
+            val videoOk = downloadStream(engine, play.videoUrl, videoFile, settings, "视频流", onProgress)
             val audioOk = if (play.audioUrl != null) {
-                downloadStream(engine, play.audioUrl, audioFile, settings, "音频流")
+                downloadStream(engine, play.audioUrl, audioFile, settings, "音频流", onProgress)
             } else {
                 emit(DownloadEvent.Log("无音频流，仅视频轨"))
                 true
             }
-            if (stopFlag) return false
+            if (stopFlag) return null
             if (!videoOk || !audioOk) {
                 LogUtil.w(TAG, "processVideo: 「${video.title}」流下载失败 videoOk=$videoOk audioOk=$audioOk")
                 emit(DownloadEvent.Log("下载失败：${video.title}"))
-                if (attempt >= retryCount) return false
+                if (attempt >= retryCount) return null
                 delay(retryDelay(attempt))
                 continue
             }
@@ -347,6 +359,7 @@ class DownloadManager(
             // 合并
             LogUtil.d(TAG, "processVideo: 「${video.title}」合并音视频")
             emit(DownloadEvent.Log("合并音视频：${video.title}"))
+            onProgress?.invoke("合并音视频…", 0L, 0L)
             try {
                 Mp4Muxer.mux(
                     videoPath = videoFile.absolutePath,
@@ -357,17 +370,18 @@ class DownloadManager(
                 LogUtil.e(TAG, "processVideo: 「${video.title}」合并失败", e)
                 emit(DownloadEvent.Log("合并失败：${e.message}"))
                 // 合并失败保留临时文件供排查，重试时删除残留（设计 4.6）
-                if (attempt >= retryCount) return false
+                if (attempt >= retryCount) return null
                 delay(retryDelay(attempt))
                 continue
             }
 
             // 校验
+            onProgress?.invoke("校验中…", 0L, 0L)
             val verifyError = PlaybackVerifier.verify(outputFile.absolutePath)
             if (verifyError != null) {
                 LogUtil.w(TAG, "processVideo: 「${video.title}」校验失败: $verifyError")
                 emit(DownloadEvent.Log("校验失败：${video.title}（$verifyError）"))
-                if (attempt >= retryCount) return false
+                if (attempt >= retryCount) return null
                 delay(retryDelay(attempt))
                 continue
             }
@@ -391,10 +405,61 @@ class DownloadManager(
             recordStore.addDownloadedBvids(setOf(video.bvid))
             LogUtil.d(TAG, "processVideo: 「${video.title}」完成")
             emit(DownloadEvent.Log("完成：${video.title}"))
-            return true
+            return outputFile
         }
         LogUtil.e(TAG, "processVideo: 「${video.title}」重试耗尽，判定失败")
-        return false
+        return null
+    }
+
+    /**
+     * 单视频播放准备（“下载→合并→播放”）：下载所选清晰度的视频/音频流，
+     * 用 [Mp4Muxer] 合并并校验，成品写入公共下载目录、记录 bvid（与批量下载一致），
+     * 但不打包上传、不从收藏夹删除源视频。
+     *
+     * 与批量下载互斥：批量任务运行中或已在准备播放时返回 null。
+     *
+     * @param onProgress 阶段进度回调：(阶段名, 已下载字节, 总字节)；合并/校验等无字节阶段 total=0
+     * @return 合并后的成品文件；失败、被停止或已在运行时返回 null
+     */
+    suspend fun prepareForPlayback(
+        video: VideoInfo,
+        settings: com.bilifolder.downloader.data.DownloadSettings,
+        onProgress: (stage: String, downloaded: Long, total: Long) -> Unit,
+    ): File? = withContext(Dispatchers.IO) {
+        if (_running.value) {
+            emit(DownloadEvent.Log("下载任务进行中，暂不支持播放"))
+            return@withContext null
+        }
+        if (_playbackPreparing.value) {
+            LogUtil.w(TAG, "prepareForPlayback: 已有播放准备进行中")
+            return@withContext null
+        }
+        if (cookieStore.biliJct().isNullOrEmpty()) {
+            emit(DownloadEvent.Log("未登录，无法播放"))
+            return@withContext null
+        }
+        if (!storageManager.isDownloadDirWritable()) {
+            emit(DownloadEvent.Log("下载目录不可写，请检查存储空间"))
+            return@withContext null
+        }
+        _playbackPreparing.value = true
+        stopFlag = false
+        try {
+            val engine = resolveEngine()
+            // 播放不应触发“下载后从收藏夹删除”
+            val playSettings = settings.copy(deleteAfterDownload = false)
+            val ignoreProduced = mutableListOf<File>()
+            processVideo(
+                video = video,
+                folder = Folder(mediaId = 0L, title = video.title),
+                engine = engine,
+                settings = playSettings,
+                produced = ignoreProduced,
+                onProgress = onProgress,
+            )
+        } finally {
+            _playbackPreparing.value = false
+        }
     }
 
     /** 创建并等待单条流下载完成（含网络暂停恢复与无进展超时） */
@@ -404,6 +469,7 @@ class DownloadManager(
         file: File,
         settings: com.bilifolder.downloader.data.DownloadSettings,
         label: String = file.name,
+        onProgress: ((stage: String, downloaded: Long, total: Long) -> Unit)? = null,
     ): Boolean {
         // 断网/仅 WiFi 不满足时，先等待网络再创建任务，避免离线创建必然失败的任务
         waitForNetwork(settings.wifiOnly)
@@ -418,7 +484,7 @@ class DownloadManager(
             return false
         }
         // 新流开始：先把进度条归零，避免沿用上一条流的百分比
-        emit(DownloadEvent.FileProgress(label, 0, 0))
+        if (onProgress != null) onProgress(label, 0L, 0L) else emit(DownloadEvent.FileProgress(label, 0, 0))
 
         var lastDownloaded = 0L
         var stallCount = 0
@@ -427,7 +493,11 @@ class DownloadManager(
             awaitNetworkIfNeeded(settings.wifiOnly, engine, task)
 
             val progress = engine.query(task)
-            emit(DownloadEvent.FileProgress(label, progress.downloaded, progress.total))
+            if (onProgress != null) {
+                onProgress(label, progress.downloaded, progress.total)
+            } else {
+                emit(DownloadEvent.FileProgress(label, progress.downloaded, progress.total))
+            }
             when (progress.status) {
                 EngineStatus.DONE -> {
                     LogUtil.d(TAG, "downloadStream: ${file.name} 完成，${progress.downloaded} 字节")

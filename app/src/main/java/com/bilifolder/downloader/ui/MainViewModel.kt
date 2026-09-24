@@ -12,10 +12,13 @@ import com.bilifolder.downloader.data.model.TaskHistory
 import com.bilifolder.downloader.data.model.VideoInfo
 import com.bilifolder.downloader.data.model.WebDavConfig
 import com.bilifolder.downloader.util.LogUtil
+import java.io.File
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -280,6 +283,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteVideo(item: com.bilifolder.downloader.data.VideoLibrary.VideoItem) {
         if (container.library.delete(item)) refreshLibrary()
+    }
+
+    // ---------- 单视频播放（下载→合并→播放） ----------
+
+    /** 播放准备状态：驱动收藏夹页的下载进度条与播放器 */
+    sealed interface PlaybackState {
+        data object Idle : PlaybackState
+        data class Preparing(val stage: String, val downloaded: Long, val total: Long) : PlaybackState
+        data class Ready(val file: File) : PlaybackState
+        data class Error(val message: String) : PlaybackState
+    }
+
+    private val _playback = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
+    val playback: StateFlow<PlaybackState> = _playback.asStateFlow()
+
+    private var playbackJob: Job? = null
+
+    /** 播放代次：取消或重新播放时自增，旧协程据此放弃写状态，避免覆盖新状态 */
+    @Volatile
+    private var playbackGeneration = 0
+
+    /**
+     * 播放单条视频：成品已存在则直接播放；否则下载视频/音频流、合并、校验并入库后播放。
+     * 批量下载任务运行中时拒绝（避免与批量任务抢占引擎）。
+     */
+    fun playVideo(video: VideoInfo) {
+        if (container.downloadManager.isRunning) {
+            _playback.value = PlaybackState.Error("正在下载任务中，暂不支持播放")
+            return
+        }
+        val gen = ++playbackGeneration
+        // 停掉上一次未完成的播放准备（stopFlag 会让其尽快退出）
+        container.downloadManager.stop()
+        val previous = playbackJob
+        playbackJob = viewModelScope.launch {
+            // 等待上一次准备退出，确保 DownloadManager 的 playbackPreparing 已复位
+            previous?.join()
+            if (gen != playbackGeneration) return@launch
+
+            val storage = container.storageManager
+            val existing = File(storage.downloadDir, "${storage.safeFileName(video.title)}.mp4")
+            if (existing.isFile && existing.length() > 0L) {
+                if (gen == playbackGeneration) _playback.value = PlaybackState.Ready(existing)
+                return@launch
+            }
+
+            _playback.value = PlaybackState.Preparing("准备中…", 0L, 0L)
+            val settings = container.recordStore.settings.first()
+            val file = container.downloadManager.prepareForPlayback(video, settings) { stage, done, total ->
+                if (gen == playbackGeneration) {
+                    _playback.value = PlaybackState.Preparing(stage, done, total)
+                }
+            }
+            if (gen != playbackGeneration) return@launch
+            _playback.value = if (file != null) {
+                refreshLibrary()
+                PlaybackState.Ready(file)
+            } else {
+                PlaybackState.Error("下载或合并失败，请重试")
+            }
+        }
+    }
+
+    /** 取消播放准备（停止下载合并）并复位状态 */
+    fun cancelPlayback() {
+        playbackGeneration++
+        container.downloadManager.stop()
+        _playback.value = PlaybackState.Idle
+    }
+
+    /** 播放器/失败提示关闭后复位状态 */
+    fun consumePlayback() {
+        _playback.value = PlaybackState.Idle
     }
 
     // ---------- 任务历史操作（需求 18、22） ----------

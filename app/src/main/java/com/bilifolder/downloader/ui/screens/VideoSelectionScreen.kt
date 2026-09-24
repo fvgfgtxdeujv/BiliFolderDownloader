@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -26,6 +27,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
@@ -51,6 +53,7 @@ import com.bilifolder.downloader.data.model.Folder
 import com.bilifolder.downloader.data.model.VideoInfo
 import com.bilifolder.downloader.service.DownloadService
 import com.bilifolder.downloader.ui.MainViewModel
+import java.io.File
 
 private val QUALITY_OPTIONS = listOf(64 to "720P", 80 to "1080P", 112 to "1080P+", 116 to "1080P60")
 private val LIMIT_OPTIONS = listOf(0 to "不限速", 100 to "100 KB/s", 300 to "300 KB/s", 500 to "500 KB/s", 1000 to "1 MB/s")
@@ -79,14 +82,43 @@ fun VideoSelectionScreen(
     val engineType by viewModel.engineType.collectAsStateWithLifecycle()
     val gopeedAvailable by viewModel.gopeedAvailable.collectAsStateWithLifecycle()
     val webDavConfig by viewModel.webDavConfig.collectAsStateWithLifecycle()
+    val playback by viewModel.playback.collectAsStateWithLifecycle()
 
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var hint by remember { mutableStateOf<String?>(null) }
     var showMobileDataDialog by remember { mutableStateOf(false) }
+    var playTarget by remember { mutableStateOf<VideoInfo?>(null) }
+    var pendingPlay by remember { mutableStateOf<VideoInfo?>(null) }
 
     LaunchedEffect(mediaId) {
         val expected = viewModel.folders.value.firstOrNull { it.mediaId == mediaId }?.mediaCount
         viewModel.loadFolderVideos(mediaId, folderTitle, expectedCount = expected)
+    }
+
+    /** 点击播放：已下载直接播放；否则先做网络判断，再触发“下载→合并→播放” */
+    fun requestPlay(video: VideoInfo) {
+        val storage = viewModel.container.storageManager
+        val existing = File(storage.downloadDir, "${storage.safeFileName(video.title)}.mp4")
+        if (existing.isFile && existing.length() > 0L) {
+            hint = null
+            playTarget = video
+            viewModel.playVideo(video)
+            return
+        }
+        val network = viewModel.container.networkMonitor.networkState.value
+        when {
+            network == NetworkMonitor.NetworkState.DISCONNECTED ->
+                hint = "当前无网络，请检查网络连接后重试"
+
+            network == NetworkMonitor.NetworkState.CELLULAR && settings.mobileDataPrompt ->
+                pendingPlay = video
+
+            else -> {
+                hint = null
+                playTarget = video
+                viewModel.playVideo(video)
+            }
+        }
     }
 
     val mediaCount = folderMeta?.second ?: videos.size
@@ -223,6 +255,7 @@ fun VideoSelectionScreen(
                                 onToggle = { checked ->
                                     selected = if (checked) selected + video.bvid else selected - video.bvid
                                 },
+                                onPlay = { requestPlay(video) },
                             )
                         }
                         item {
@@ -269,10 +302,116 @@ fun VideoSelectionScreen(
             },
         )
     }
+
+    pendingPlay?.let { video ->
+        AlertDialog(
+            onDismissRequest = { pendingPlay = null },
+            title = { Text("使用移动数据播放？") },
+            text = { Text("当前未连接 WiFi，继续将使用移动数据下载后播放，可能产生流量费用。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingPlay = null
+                        playTarget = video
+                        viewModel.playVideo(video)
+                    },
+                ) {
+                    Text("继续")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPlay = null }) { Text("取消") }
+            },
+        )
+    }
+
+    when (val p = playback) {
+        is MainViewModel.PlaybackState.Preparing -> PlaybackPrepDialog(
+            title = playTarget?.title ?: folderTitle,
+            stage = p.stage,
+            downloaded = p.downloaded,
+            total = p.total,
+            onCancel = {
+                playTarget = null
+                viewModel.cancelPlayback()
+            },
+        )
+
+        is MainViewModel.PlaybackState.Ready -> VideoPlayerDialog(
+            file = p.file,
+            title = playTarget?.title ?: p.file.nameWithoutExtension,
+            onDismiss = {
+                playTarget = null
+                viewModel.consumePlayback()
+            },
+        )
+
+        is MainViewModel.PlaybackState.Error -> AlertDialog(
+            onDismissRequest = { viewModel.consumePlayback() },
+            title = { Text("无法播放") },
+            text = { Text(p.message) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.consumePlayback() }) { Text("确定") }
+            },
+        )
+
+        MainViewModel.PlaybackState.Idle -> Unit
+    }
+}
+
+/** 播放准备进度弹窗：下载字节进度或合并/校验阶段提示 */
+@Composable
+private fun PlaybackPrepDialog(
+    title: String,
+    stage: String,
+    downloaded: Long,
+    total: Long,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { },
+        title = { Text("准备播放") },
+        text = {
+            Column {
+                Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                Spacer(Modifier.height(12.dp))
+                if (total > 0L) {
+                    LinearProgressIndicator(
+                        progress = { (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "$stage ${downloaded * 100 / total}%（${formatBytes(downloaded)}/${formatBytes(total)}）",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    Text(stage, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCancel) { Text("取消") }
+        },
+    )
+}
+
+/** 字节数格式化：>=1GB 显示 GB，>=1MB 显示 MB，其余显示 KB */
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024 * 1024 * 1024 -> "%.2f GB".format(bytes / 1024.0 / 1024 / 1024)
+    bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
+    else -> "%.0f KB".format(bytes / 1024.0)
 }
 
 @Composable
-private fun VideoRow(video: VideoInfo, checked: Boolean, onToggle: (Boolean) -> Unit) {
+private fun VideoRow(
+    video: VideoInfo,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onPlay: () -> Unit,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -284,15 +423,20 @@ private fun VideoRow(video: VideoInfo, checked: Boolean, onToggle: (Boolean) -> 
             ),
     ) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(checked = checked, onCheckedChange = null)
             Text(
                 video.title,
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(start = 4.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 4.dp),
             )
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "播放")
+            }
         }
     }
 }

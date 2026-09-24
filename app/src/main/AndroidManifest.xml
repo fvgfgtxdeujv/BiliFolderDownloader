@@ -26,6 +26,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|screenLayout"
             android:theme="@style/Theme.BiliFolderDownloader">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
