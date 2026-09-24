@@ -5,8 +5,11 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.net.Uri
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -37,10 +40,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -58,7 +63,7 @@ private val SPEED_OPTIONS = listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f)
  *
  * - 默认 PlayerView 控制器提供播放/暂停、进度条拖动与时间显示
  * - 顶部自绘操作条提供倍速切换（0.5x/1.0x/1.25x/1.5x/2.0x）与全屏（横屏）切换
- * - 全屏时切横屏并隐藏系统栏，退出时恢复
+ * - 全屏时切横屏、隐藏系统栏并让内容延伸进刘海/挖孔区（display cutout）
  */
 @Composable
 fun VideoPlayerDialog(file: File, title: String, onDismiss: () -> Unit) {
@@ -77,22 +82,6 @@ fun VideoPlayerDialog(file: File, title: String, onDismiss: () -> Unit) {
 
     LaunchedEffect(exoPlayer, speed) {
         exoPlayer.playbackParameters = PlaybackParameters(speed)
-    }
-
-    // 全屏：横屏 + 沉浸式隐藏系统栏；退出时恢复
-    LaunchedEffect(fullscreen) {
-        val window = activity?.window ?: return@LaunchedEffect
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        if (fullscreen) {
-            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            WindowCompat.setDecorFitsSystemWindows(window, false)
-            controller.hide(WindowInsetsCompat.Type.systemBars())
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        } else {
-            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            WindowCompat.setDecorFitsSystemWindows(window, true)
-            controller.show(WindowInsetsCompat.Type.systemBars())
-        }
     }
 
     DisposableEffect(exoPlayer) {
@@ -118,6 +107,20 @@ fun VideoPlayerDialog(file: File, title: String, onDismiss: () -> Unit) {
         onDismissRequest = { if (fullscreen) fullscreen = false else onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
+        // Dialog 是独立窗口，全屏属性必须作用在它自己的 window 上
+        val dialogView = LocalView.current
+        val dialogWindow = remember(dialogView) {
+            (dialogView.parent as? DialogWindowProvider)?.window
+        }
+        LaunchedEffect(fullscreen, dialogWindow) {
+            activity?.requestedOrientation = if (fullscreen) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+            (dialogWindow ?: activity?.window)?.let { applyFullscreen(it, fullscreen) }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -171,6 +174,38 @@ fun VideoPlayerDialog(file: File, title: String, onDismiss: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/**
+ * 应用/恢复全屏窗口属性。
+ *
+ * 关键：除隐藏系统栏外，还要把 [WindowManager.LayoutParams.layoutInDisplayCutoutMode]
+ * 设为 SHORT_EDGES，否则刘海/挖孔区域不会被内容覆盖（表现为屏幕边缘漏出一条）。
+ */
+@Suppress("DEPRECATION")
+private fun applyFullscreen(window: Window, fullscreen: Boolean) {
+    val controller = WindowInsetsControllerCompat(window, window.decorView)
+    val attrs = window.attributes
+    if (fullscreen) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            attrs.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        attrs.width = ViewGroup.LayoutParams.MATCH_PARENT
+        attrs.height = ViewGroup.LayoutParams.MATCH_PARENT
+        window.attributes = attrs
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    } else {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            attrs.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+        }
+        window.attributes = attrs
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        controller.show(WindowInsetsCompat.Type.systemBars())
     }
 }
 
