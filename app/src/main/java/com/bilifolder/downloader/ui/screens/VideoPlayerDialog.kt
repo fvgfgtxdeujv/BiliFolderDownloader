@@ -52,6 +52,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import java.io.File
 
@@ -131,6 +132,9 @@ fun VideoPlayerDialog(file: File, title: String, onDismiss: () -> Unit) {
                     PlayerView(ctx).apply {
                         player = exoPlayer
                         useController = true
+                        // 保持原比例、尽量铺满，完整显示不裁切（可能留黑边）
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        setShutterBackgroundColor(android.graphics.Color.BLACK)
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -178,32 +182,33 @@ fun VideoPlayerDialog(file: File, title: String, onDismiss: () -> Unit) {
 }
 
 /**
- * 应用/恢复全屏窗口属性。
+ * 应用/恢复播放器窗口属性。
  *
- * 关键：除隐藏系统栏外，还要把 [WindowManager.LayoutParams.layoutInDisplayCutoutMode]
- * 设为 SHORT_EDGES，否则刘海/挖孔区域不会被内容覆盖（表现为屏幕边缘漏出一条）。
+ * 无论是否全屏，都把窗口设为 MATCH_PARENT 铺满屏幕，让 PlayerView 的 FIT 缩放
+ * 能自适应到整块屏幕（否则窗口高度为 WRAP_CONTENT 时视频区域不会自适应）。
+ * 全屏时额外设置 [WindowManager.LayoutParams.layoutInDisplayCutoutMode] = SHORT_EDGES，
+ * 让内容延伸进刘海/挖孔区，避免屏幕边缘漏出一条。
  */
 @Suppress("DEPRECATION")
 private fun applyFullscreen(window: Window, fullscreen: Boolean) {
     val controller = WindowInsetsControllerCompat(window, window.decorView)
     val attrs = window.attributes
-    if (fullscreen) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            attrs.layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+    // 始终铺满屏幕，保证视频自适应
+    attrs.width = ViewGroup.LayoutParams.MATCH_PARENT
+    attrs.height = ViewGroup.LayoutParams.MATCH_PARENT
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        attrs.layoutInDisplayCutoutMode = if (fullscreen) {
+            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        } else {
+            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
         }
-        attrs.width = ViewGroup.LayoutParams.MATCH_PARENT
-        attrs.height = ViewGroup.LayoutParams.MATCH_PARENT
-        window.attributes = attrs
+    }
+    window.attributes = attrs
+    if (fullscreen) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     } else {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            attrs.layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-        }
-        window.attributes = attrs
         WindowCompat.setDecorFitsSystemWindows(window, true)
         controller.show(WindowInsetsCompat.Type.systemBars())
     }

@@ -26,8 +26,8 @@ android {
         applicationId = "com.bilifolder.downloader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "1.0.22"
+        versionCode = 24
+        versionName = "1.0.23"
 
         // Gopeed 引擎的 gomobile 绑定仅提供 arm64-v8a（下载引擎本就只支持 arm64）
         ndk {
